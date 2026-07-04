@@ -1,58 +1,64 @@
-import { cn } from '@/lib/utils'
-
-interface ToolItem {
-  id: string
-  name: string
-  description: string
-  icon: string
-  category: string
-}
-
-// placeholder — will come from Go backend later
-const PLACEHOLDER_TOOLS: ToolItem[] = [
-  { id: '1', name: 'JSON 格式化', description: '格式化与验证 JSON 数据', icon: '{ }', category: 'text' },
-  { id: '2', name: 'Base64 编解码', description: 'Base64 编码与解码', icon: 'B64', category: 'text' },
-  { id: '3', name: '时间戳转换', description: 'Unix 时间戳与日期互转', icon: '🕐', category: 'text' },
-  { id: '4', name: '图片识别 (OCR)', description: '基于 PaddleOCR 的图片文字识别', icon: '👁', category: 'image' },
-  { id: '5', name: '图片压缩', description: '压缩 PNG/JPEG/WebP 图片', icon: '📦', category: 'image' },
-  { id: '6', name: 'JSON → Excel', description: '将 JSON 数据导出为 Excel', icon: '📊', category: 'text' },
-]
+import { useEffect, useState } from 'react'
+import { ToolCard } from '@/components/tools/ToolCard'
+import { model } from '../../wailsjs/go/models'
+import { useI18n } from '@/hooks/useI18n'
 
 interface ToolGridProps {
   category: string
+  tools: model.ToolInfo[]
+  loading: boolean
+  onSelectTool: (tool: model.ToolInfo) => void
+  onTogglePin?: (id: string) => void
+  isPinned?: (id: string) => boolean
 }
 
-export function ToolGrid({ category }: ToolGridProps) {
-  const tools = category === 'all'
-    ? PLACEHOLDER_TOOLS
-    : PLACEHOLDER_TOOLS.filter(t => t.category === category)
+export function ToolGrid({ category, tools, loading, onSelectTool, onTogglePin, isPinned }: ToolGridProps) {
+  const { t } = useI18n()
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    setVisible(false)
+    const timer = setTimeout(() => setVisible(true), 60)
+    return () => clearTimeout(timer)
+  }, [category])
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">工具箱</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          选择工具开始使用
-        </p>
-      </div>
+    <div className="relative flex-1 overflow-y-auto">
+      <div className="relative z-10 p-6">
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight">{t('toolGrid.title')}</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            {tools.length > 0
+              ? t('toolGrid.count', { n: tools.length })
+              : t('toolGrid.discovering')
+            }
+          </p>
+        </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {tools.map((tool) => (
-          <button
-            key={tool.id}
-            className="flex flex-col items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground cursor-pointer"
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary text-sm font-mono">
-              {tool.icon}
-            </div>
-            <div>
-              <div className="font-medium text-sm">{tool.name}</div>
-              <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                {tool.description}
-              </div>
-            </div>
-          </button>
-        ))}
+        {loading && tools.length === 0 ? (
+          <div className="flex items-center justify-center py-20">
+            <p className="text-sm text-muted-foreground/60">{t('toolGrid.scanning')}</p>
+          </div>
+        ) : tools.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 py-20">
+            <p className="text-sm text-muted-foreground/60">{t('toolGrid.empty')}</p>
+            <p className="text-xs text-muted-foreground/40">{t('toolGrid.emptyHint')}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {tools.map((tool, i) => (
+              <ToolCard
+                key={tool.id}
+                tool={tool}
+                index={i}
+                visible={visible}
+                onClick={() => onSelectTool(tool)}
+                isPinned={isPinned?.(tool.id)}
+                onTogglePin={onTogglePin}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

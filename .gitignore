@@ -35,3 +35,6 @@ Thumbs.db
 
 # Env
 .env
+
+# Temp (test tools, scratch files)
+/temp/

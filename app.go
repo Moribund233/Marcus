@@ -2,21 +2,30 @@ package main
 
 import (
 	"context"
-	"fmt"
+
+	"Marcus/internal/app"
 )
 
 type App struct {
-	ctx context.Context
+	impl *app.App
 }
 
 func NewApp() *App {
-	return &App{}
+	return &App{impl: app.New()}
 }
 
 func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
+	a.impl.Startup(ctx)
 }
 
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
+func (a *App) shutdown(ctx context.Context) {
+	a.impl.Shutdown(ctx)
+}
+
+func (a *App) OpenFileDialog(filter string) (string, error) {
+	return a.impl.OpenFileDialog(filter)
+}
+
+func (a *App) OpenDirectoryDialog() (string, error) {
+	return a.impl.OpenDirectoryDialog()
 }
