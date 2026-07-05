@@ -1,9 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, AlertTriangle, Play, Square, Terminal, Globe, File, FolderOpen, FileUp } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, Play, Square, Terminal, Globe, File, FolderOpen, FileUp, Trash2 } from 'lucide-react'
 import { model } from '../../../wailsjs/go/models'
 import { EventsOn } from '../../../wailsjs/runtime'
 import { OpenFileDialog, OpenDirectoryDialog } from '../../../wailsjs/go/main/App'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { TerminalView } from '@/components/terminal/TerminalView'
 import { FormRenderer } from '@/components/renderer/FormRenderer'
 import { OutputRenderer } from '@/components/renderer/OutputRenderer'
@@ -17,6 +26,7 @@ interface ToolDetailProps {
   onBack: () => void
   onLaunch: (id: string, args: Record<string, string>) => Promise<model.ProcessState>
   onStop: (id: string) => Promise<void>
+  onUninstall: (id: string) => Promise<model.UninstallResult>
   onToolLaunch: (tool: model.ToolInfo) => void
   onToolStop: (toolId: string) => void
 }
@@ -28,7 +38,7 @@ interface ArgField {
   default?: unknown
 }
 
-export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToolStop }: ToolDetailProps) {
+export function ToolDetail({ tool, onBack, onLaunch, onStop, onUninstall, onToolLaunch, onToolStop }: ToolDetailProps) {
   const { t } = useI18n()
   const [state, setState] = useState<model.ProcessState | null>(null)
   const [output, setOutput] = useState<string[]>([])
@@ -110,6 +120,20 @@ export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToo
     setState((prev) => prev ? model.ProcessState.createFrom({ ...prev, status: 'stopping' }) : null)
   }
 
+  const [uninstalling, setUninstalling] = useState(false)
+
+  const handleUninstallConfirm = async () => {
+    setUninstalling(true)
+    try {
+      const result = await onUninstall(tool.id)
+      if (result.success) {
+        onBack()
+      }
+    } finally {
+      setUninstalling(false)
+    }
+  }
+
   const contributionIcon = () => {
     switch (tool.contribution) {
       case 'web': return <Globe className="h-4 w-4" />
@@ -141,15 +165,63 @@ export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToo
         </div>
         <div className="ml-auto flex gap-2">
           {!isRunning ? (
-            <Button onClick={handleLaunch} disabled={state?.status === 'launching'}>
-              <Play className="mr-1.5 h-4 w-4" />
-              {t('toolDetail.launch')}
-            </Button>
+            <>
+              <Button onClick={handleLaunch} disabled={state?.status === 'launching'}>
+                <Play className="mr-1.5 h-4 w-4" />
+                {t('toolDetail.launch')}
+              </Button>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Trash2 className="mr-1.5 h-4 w-4" />
+                    {t('toolDetail.uninstall')}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>{t('toolDetail.uninstall')}</DialogTitle>
+                    <DialogDescription>
+                      {t('toolDetail.uninstallConfirm', { name: tool.display_name })}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline">{t('toolAddManual.cancel')}</Button>
+                    <Button variant="destructive" onClick={handleUninstallConfirm} disabled={uninstalling}>
+                      {uninstalling ? `${t('toolDetail.uninstall')}...` : t('toolDetail.uninstall')}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </>
           ) : (
-            <Button variant="destructive" onClick={handleStop}>
-              <Square className="mr-1.5 h-4 w-4" />
-              {t('toolDetail.stop')}
-            </Button>
+            <>
+              <Button variant="destructive" onClick={handleStop}>
+                <Square className="mr-1.5 h-4 w-4" />
+                {t('toolDetail.stop')}
+              </Button>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Trash2 className="mr-1.5 h-4 w-4" />
+                    {t('toolDetail.uninstall')}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>{t('toolDetail.uninstall')}</DialogTitle>
+                    <DialogDescription>
+                      {t('toolDetail.uninstallConfirm', { name: tool.display_name })}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline">{t('toolAddManual.cancel')}</Button>
+                    <Button variant="destructive" onClick={handleUninstallConfirm} disabled={uninstalling}>
+                      {uninstalling ? `${t('toolDetail.uninstall')}...` : t('toolDetail.uninstall')}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </>
           )}
         </div>
       </div>

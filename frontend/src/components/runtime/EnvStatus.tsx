@@ -102,7 +102,7 @@ export function EnvStatus({ status, loading, onRefresh, onClose }: EnvStatusProp
                         onClick={() => handleInstall(key)}
                       >
                         <Download className="h-3 w-3" />
-                        安装
+                        {t('env.install')}
                       </Button>
                     )}
                   </div>

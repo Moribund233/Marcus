@@ -377,7 +377,7 @@ func (m *Manager) startTerminal(manifest model.ToolManifest, args map[string]str
 	return &copy, nil
 }
 
-func (m *Manager) streamOutput(proc *Process, r interface{ Read([]byte) (int, error) }, toolID string) {
+func (m *Manager) streamOutput(_ *Process, r interface{ Read([]byte) (int, error) }, toolID string) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := r.Read(buf)

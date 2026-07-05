@@ -32,7 +32,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState(t('statusBar.ready'))
   const [showToolPicker, setShowToolPicker] = useState(false)
   const [allTools, setAllTools] = useState<model.ToolInfo[]>([])
-  const { tools, loading, refresh, launch, stop, addManual } = useTools(category)
+  const { tools, loading, refresh, launch, stop, addManual, uninstall } = useTools(category)
   const { status: runtimeStatus, loading: runtimeLoading, refresh: refreshRuntime } = useRuntime()
   const { pinnedIds, togglePin, isPinned } = usePinnedTools()
 
@@ -40,7 +40,9 @@ function App() {
   useEffect(() => {
     GetConfig().then((cfg) => {
       if (cfg) {
-        document.documentElement.classList.toggle('dark', cfg.theme !== 'light')
+        document.documentElement.classList.remove('dark', 'theme-marcus')
+        if (cfg.theme === 'dark') document.documentElement.classList.add('dark')
+        if (cfg.theme === 'marcus') document.documentElement.classList.add('theme-marcus')
         if (cfg.language) setLocale(cfg.language)
       }
     }).catch((err) => console.error('GetConfig failed', err))
@@ -195,6 +197,7 @@ function App() {
               onBack={handleBack}
               onLaunch={launch}
               onStop={stop}
+              onUninstall={uninstall}
               onToolLaunch={handleToolLaunch}
               onToolStop={handleToolStop}
             />

@@ -19,8 +19,43 @@ import {
   StoreInstall,
 } from '../../../../wailsjs/go/main/App'
 import { model } from '../../../../wailsjs/go/models'
+import { ErrorDialog } from '@/components/common/ErrorDialog'
 
-export function MarketTab() {
+type TFunction = (key: string, params?: Record<string, string | number>) => string
+
+function parseError(error: string, t: TFunction): string {
+  if (error.includes('TLS handshake timeout') || error.includes('timeout')) {
+    return t('toolAdd.market.error.networkTimeout')
+  }
+  if (error.includes('connection refused') || error.includes('net/http')) {
+    return t('toolAdd.market.error.connectionFailed')
+  }
+  if (error.includes('404') || error.includes('not found')) {
+    return t('toolAdd.market.error.notFound')
+  }
+  if (error.includes('403') || error.includes('forbidden')) {
+    return t('toolAdd.market.error.forbidden')
+  }
+  if (error.includes('500') || error.includes('server error')) {
+    return t('toolAdd.market.error.serverError')
+  }
+  if (error.includes('download')) {
+    return t('toolAdd.market.error.downloadFailed')
+  }
+  if (error.includes('bun not found')) {
+    return t('toolAdd.market.error.bunNotFound')
+  }
+  if (error.includes('uv not found')) {
+    return t('toolAdd.market.error.uvNotFound')
+  }
+  return t('toolAdd.market.error.unknown')
+}
+
+interface MarketTabProps {
+  onInstallSuccess?: () => void
+}
+
+export function MarketTab({ onInstallSuccess }: MarketTabProps) {
   const { t } = useI18n()
   const [plugins, setPlugins] = useState<model.StorePlugin[]>([])
   const [loading, setLoading] = useState(true)
@@ -28,6 +63,11 @@ export function MarketTab() {
   const [searchQuery, setSearchQuery] = useState('')
   const [installing, setInstalling] = useState<Record<string, boolean>>({})
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [errorDialog, setErrorDialog] = useState<{ open: boolean; title: string; message: string; details?: string }>({
+    open: false,
+    title: '',
+    message: '',
+  })
 
   const loadPlugins = useCallback(async (query?: string) => {
     try {
@@ -51,7 +91,13 @@ export function MarketTab() {
       await loadPlugins()
       setStatusMsg({ type: 'success', text: t('toolAdd.market.syncSuccess') })
     } catch (e) {
-      setStatusMsg({ type: 'error', text: t('toolAdd.market.syncError', { error: String(e) }) })
+      const errMsg = String(e)
+      setErrorDialog({
+        open: true,
+        title: t('toolAdd.market.syncFailed'),
+        message: parseError(errMsg, t),
+        details: errMsg,
+      })
     } finally {
       setSyncing(false)
     }
@@ -70,15 +116,28 @@ export function MarketTab() {
       if (result.success) {
         setStatusMsg({ type: 'success', text: t('toolAdd.market.installSuccess', { name: pluginId }) })
         await loadPlugins(searchQuery || undefined)
+        onInstallSuccess?.()
       } else {
-        setStatusMsg({ type: 'error', text: t('toolAdd.market.installError', { error: result.error || 'unknown' }) })
+        const errMsg = String(result.error || 'unknown')
+        setErrorDialog({
+          open: true,
+          title: t('toolAdd.market.installFailed'),
+          message: parseError(errMsg, t),
+          details: errMsg,
+        })
       }
     } catch (e) {
-      setStatusMsg({ type: 'error', text: t('toolAdd.market.installError', { error: String(e) }) })
+      const errMsg = String(e)
+      setErrorDialog({
+        open: true,
+        title: t('toolAdd.market.installFailed'),
+        message: parseError(errMsg, t),
+        details: errMsg,
+      })
     } finally {
       setInstalling((prev) => ({ ...prev, [pluginId]: false }))
     }
-  }, [loadPlugins, searchQuery, t])
+  }, [loadPlugins, searchQuery, t, onInstallSuccess])
 
   useEffect(() => {
     loadPlugins()
@@ -235,6 +294,14 @@ export function MarketTab() {
           </div>
         )}
       </div>
+
+      <ErrorDialog
+        open={errorDialog.open}
+        onOpenChange={(open) => setErrorDialog((prev) => ({ ...prev, open }))}
+        title={errorDialog.title}
+        message={errorDialog.message}
+        details={errorDialog.details}
+      />
     </div>
   )
 }

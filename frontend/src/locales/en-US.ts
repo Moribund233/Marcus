@@ -29,6 +29,8 @@ const en: Record<string, string> = {
 
   'toolDetail.launch': 'Launch',
   'toolDetail.stop': 'Stop',
+  'toolDetail.uninstall': 'Uninstall',
+  'toolDetail.uninstallConfirm': 'Are you sure you want to uninstall "{name}"? This action cannot be undone.',
   'toolDetail.serviceStarted': 'Service started: http://127.0.0.1:{port}',
   'toolDetail.arguments': 'Arguments',
 
@@ -56,8 +58,19 @@ const en: Record<string, string> = {
   'toolAdd.market.version': 'Version',
   'toolAdd.market.installSuccess': 'Plugin {name} installed',
   'toolAdd.market.installError': 'Install failed: {error}',
+  'toolAdd.market.installFailed': 'Install Failed',
   'toolAdd.market.syncSuccess': 'Plugin list updated',
   'toolAdd.market.syncError': 'Sync failed: {error}',
+  'toolAdd.market.syncFailed': 'Sync Failed',
+  'toolAdd.market.error.networkTimeout': 'Network connection timed out. Please check your connection or try again later.',
+  'toolAdd.market.error.connectionFailed': 'Unable to connect to the plugin marketplace. Please check your network connection.',
+  'toolAdd.market.error.notFound': 'Plugin resource not found. It may have been removed or the version does not exist.',
+  'toolAdd.market.error.forbidden': 'Access denied. You may need to log in or have insufficient permissions.',
+  'toolAdd.market.error.serverError': 'Server internal error. Please try again later.',
+  'toolAdd.market.error.downloadFailed': 'Download failed. Please check your network connection or try again later.',
+  'toolAdd.market.error.bunNotFound': 'bun runtime is not installed and cannot install JS dependencies. Please install bun in Settings → Runtime.',
+  'toolAdd.market.error.uvNotFound': 'uv runtime is not installed and cannot install Python dependencies. Please install uv in Settings → Runtime.',
+  'toolAdd.market.error.unknown': 'Installation failed due to an unknown error.',
   'toolAdd.cli.title': 'CLI',
 
   'toolAddManual.title': 'Add Tool Manually',
@@ -163,6 +176,24 @@ const en: Record<string, string> = {
 
   'toolCard.source': 'Source',
   'toolCard.contribution': 'Contribution',
+  'toolCard.unhealthy': 'Unavailable',
+
+  'errorDialog.details': 'Details',
+  'errorDialog.confirm': 'OK',
+
+  'errorBoundary.title': 'Something went wrong',
+  'errorBoundary.unknownError': 'An unknown error occurred',
+  'errorBoundary.retry': 'Retry',
+
+  'outputRenderer.title': 'Output',
+  'outputRenderer.waiting': 'Waiting for results...',
+
+  'formRenderer.selectDir': 'Select directory...',
+  'formRenderer.selectFile': 'Select file...',
+
+  'statusBar.hasIssues': 'has usability issues',
+
+  'env.install': 'Install',
 }
 
 export default en

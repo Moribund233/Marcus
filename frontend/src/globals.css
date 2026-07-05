@@ -10,19 +10,19 @@
     --card-foreground: 240 6% 10%;
     --popover: 0 0% 100%;
     --popover-foreground: 240 6% 10%;
-    --primary: 180 80% 32%;
+    --primary: 219 34% 44%;
     --primary-foreground: 0 0% 100%;
     --secondary: 240 5% 90%;
     --secondary-foreground: 240 6% 10%;
     --muted: 240 5% 92%;
     --muted-foreground: 240 4% 46%;
-    --accent: 180 40% 88%;
+    --accent: 219 34% 74%;
     --accent-foreground: 240 6% 10%;
     --destructive: 0 70% 50%;
     --destructive-foreground: 0 0% 100%;
     --border: 240 5% 84%;
     --input: 240 5% 84%;
-    --ring: 180 80% 32%;
+    --ring: 219 34% 44%;
     --radius: 0.5rem;
   }
 
@@ -33,19 +33,42 @@
     --card-foreground: 210 12% 90%;
     --popover: 240 5% 11%;
     --popover-foreground: 210 12% 90%;
-    --primary: 180 70% 42%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 219 34% 54%;
+    --primary-foreground: 210 12% 90%;
     --secondary: 240 4% 18%;
     --secondary-foreground: 210 12% 90%;
     --muted: 240 4% 15%;
     --muted-foreground: 210 6% 58%;
-    --accent: 180 35% 18%;
+    --accent: 219 34% 24%;
     --accent-foreground: 210 12% 90%;
     --destructive: 0 65% 42%;
     --destructive-foreground: 210 12% 90%;
     --border: 240 4% 20%;
     --input: 240 4% 20%;
-    --ring: 180 70% 42%;
+    --ring: 219 34% 54%;
+    --radius: 0.5rem;
+  }
+
+  .theme-marcus {
+    --background: 0 0% 95%;
+    --foreground: 2 23% 38%;
+    --card: 0 0% 98%;
+    --card-foreground: 2 23% 38%;
+    --popover: 0 0% 98%;
+    --popover-foreground: 2 23% 38%;
+    --primary: 219 34% 74%;
+    --primary-foreground: 240 6% 10%;
+    --secondary: 2 15% 88%;
+    --secondary-foreground: 2 23% 38%;
+    --muted: 2 10% 92%;
+    --muted-foreground: 2 15% 50%;
+    --accent: 219 34% 74%;
+    --accent-foreground: 240 6% 10%;
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 2 10% 82%;
+    --input: 2 10% 82%;
+    --ring: 219 34% 74%;
     --radius: 0.5rem;
   }
 }

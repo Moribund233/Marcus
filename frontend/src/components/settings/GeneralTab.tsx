@@ -1,4 +1,4 @@
-import { Sun, Languages, Scan, LogOut, Moon } from 'lucide-react'
+import { Sun, Languages, Scan, LogOut, Moon, Palette } from 'lucide-react'
 import { useConfig } from '@/hooks/useConfig'
 import { useI18n } from '@/hooks/useI18n'
 
@@ -37,7 +37,9 @@ export function GeneralTab() {
 
   const setTheme = (next: string) => {
     save({ theme: next })
-    document.documentElement.classList.toggle('dark', next === 'dark')
+    document.documentElement.classList.remove('dark', 'theme-marcus')
+    if (next === 'dark') document.documentElement.classList.add('dark')
+    if (next === 'marcus') document.documentElement.classList.add('theme-marcus')
   }
 
   return (
@@ -48,7 +50,7 @@ export function GeneralTab() {
       <div className="mt-8 flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {theme === 'dark' ? <Moon className="h-4 w-4 text-muted-foreground" /> : <Sun className="h-4 w-4 text-muted-foreground" />}
+            {theme === 'dark' ? <Moon className="h-4 w-4 text-muted-foreground" /> : theme === 'marcus' ? <Palette className="h-4 w-4 text-muted-foreground" /> : <Sun className="h-4 w-4 text-muted-foreground" />}
             <div>
               <div className="text-sm">{t('general.theme')}</div>
               <div className="text-xs text-muted-foreground">{t('general.themeDesc')}</div>
@@ -58,6 +60,7 @@ export function GeneralTab() {
             options={[
               { label: t('general.themeDark'), value: 'dark' },
               { label: t('general.themeLight'), value: 'light' },
+              { label: 'Marcus', value: 'marcus' },
             ]}
             value={theme}
             onChange={setTheme}

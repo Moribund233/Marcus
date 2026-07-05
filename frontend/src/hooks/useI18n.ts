@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, createElement, type ReactNode } from 'react'
 import zh from '@/locales/zh-CN'
 import en from '@/locales/en-US'
 
@@ -19,7 +19,15 @@ function getStoredLocale(): string {
 
 type I18nKey = keyof typeof zh
 
-export function useI18n() {
+interface I18nContextValue {
+  locale: string
+  t: (key: I18nKey, params?: Record<string, string | number>) => string
+  setLocale: (lang: string) => void
+}
+
+const I18nContext = createContext<I18nContextValue | null>(null)
+
+export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState(getStoredLocale)
 
   const t = useCallback((key: I18nKey, params?: Record<string, string | number>) => {
@@ -34,5 +42,23 @@ export function useI18n() {
     setLocaleState(lang)
   }, [])
 
-  return { t, locale, setLocale }
+  return createElement(I18nContext.Provider, { value: { locale, t, setLocale } }, children)
+}
+
+export function useI18n() {
+  const ctx = useContext(I18nContext)
+  if (!ctx) {
+    const locale = getStoredLocale()
+    return {
+      locale,
+      t: (key: I18nKey, params?: Record<string, string | number>) => {
+        const msg = LOCALE_MAP[locale]?.[key]
+        if (msg === undefined) return key
+        if (!params) return msg
+        return msg.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? `{${k}}`))
+      },
+      setLocale: (lang: string) => { localStorage.setItem(STORAGE_KEY, lang) },
+    }
+  }
+  return ctx
 }

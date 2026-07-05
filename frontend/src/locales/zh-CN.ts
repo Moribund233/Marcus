@@ -29,6 +29,8 @@ const zh: Record<string, string> = {
 
   'toolDetail.launch': '启动',
   'toolDetail.stop': '停止',
+  'toolDetail.uninstall': '卸载',
+  'toolDetail.uninstallConfirm': '确定要卸载工具「{name}」吗？此操作无法撤销。',
   'toolDetail.serviceStarted': '服务已启动：http://127.0.0.1:{port}',
   'toolDetail.arguments': '参数',
 
@@ -56,8 +58,19 @@ const zh: Record<string, string> = {
   'toolAdd.market.version': '版本',
   'toolAdd.market.installSuccess': '插件 {name} 安装成功',
   'toolAdd.market.installError': '安装失败: {error}',
+  'toolAdd.market.installFailed': '安装失败',
   'toolAdd.market.syncSuccess': '插件列表已更新',
   'toolAdd.market.syncError': '同步失败: {error}',
+  'toolAdd.market.syncFailed': '同步失败',
+  'toolAdd.market.error.networkTimeout': '网络连接超时，请检查您的网络连接或稍后重试。',
+  'toolAdd.market.error.connectionFailed': '无法连接到插件市场，请检查网络连接是否正常。',
+  'toolAdd.market.error.notFound': '插件资源未找到，可能已被移除或版本不存在。',
+  'toolAdd.market.error.forbidden': '访问被拒绝，可能需要登录或权限不足。',
+  'toolAdd.market.error.serverError': '服务器内部错误，请稍后重试。',
+  'toolAdd.market.error.downloadFailed': '下载失败，请检查网络连接或稍后重试。',
+  'toolAdd.market.error.bunNotFound': 'bun 运行时未安装，无法安装 JS 依赖。请在「设置」→「运行环境」中安装 bun。',
+  'toolAdd.market.error.uvNotFound': 'uv 运行时未安装，无法安装 Python 依赖。请在「设置」→「运行环境」中安装 uv。',
+  'toolAdd.market.error.unknown': '安装失败，未知错误。',
   'toolAdd.cli.title': 'CLI',
 
   'toolAddManual.title': '手动添加工具',
@@ -163,6 +176,24 @@ const zh: Record<string, string> = {
 
   'toolCard.source': '来源',
   'toolCard.contribution': '贡献类型',
+  'toolCard.unhealthy': '不可用',
+
+  'errorDialog.details': '详细信息',
+  'errorDialog.confirm': '确定',
+
+  'errorBoundary.title': '出了点问题',
+  'errorBoundary.unknownError': '发生了未知错误',
+  'errorBoundary.retry': '重试',
+
+  'outputRenderer.title': '输出结果',
+  'outputRenderer.waiting': '等待结果...',
+
+  'formRenderer.selectDir': '选择目录...',
+  'formRenderer.selectFile': '选择文件...',
+
+  'statusBar.hasIssues': '有可用性问题',
+
+  'env.install': '安装',
 }
 
 export default zh

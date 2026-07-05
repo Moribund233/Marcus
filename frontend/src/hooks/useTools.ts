@@ -8,8 +8,10 @@ import {
   AddManualTool,
   RefreshTools,
   GetToolLogs,
+  UninstallTool,
 } from '../../wailsjs/go/main/App'
 import { model } from '../../wailsjs/go/models'
+import { EventsOn } from '../../wailsjs/runtime'
 
 export function useTools(category: string) {
   const [tools, setTools] = useState<model.ToolInfo[]>([])
@@ -72,6 +74,21 @@ export function useTools(category: string) {
     return await GetToolLogs(id, limit)
   }, [])
 
+  const uninstall = useCallback(async (id: string) => {
+    const result = await UninstallTool(id)
+    if (result.success) {
+      setTools((prev) => prev.filter((t) => t.id !== id))
+    }
+    return result
+  }, [])
+
+  useEffect(() => {
+    const unsub = EventsOn('tool-uninstalled', (toolID: string) => {
+      setTools((prev) => prev.filter((t) => t.id !== toolID))
+    })
+    return () => unsub()
+  }, [])
+
   return {
     tools,
     loading,
@@ -84,5 +101,6 @@ export function useTools(category: string) {
     remove,
     addManual,
     getLogs,
+    uninstall,
   }
 }

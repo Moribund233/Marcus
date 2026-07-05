@@ -36,6 +36,7 @@ type App struct {
 	storeClient    *store.Client
 	storeInstaller *store.Installer
 	storeUpdater   *store.Updater
+	uninstaller    *tools.Uninstaller
 
 	logFile   *os.File
 	logFileMu sync.Mutex
@@ -101,6 +102,8 @@ func (a *App) Startup(ctx context.Context) {
 			}
 		}()
 	}
+
+	a.uninstaller = tools.NewUninstaller(reg.DB(), a.cfg.ToolsDir)
 
 	a.sandbox = sandbox.NewManager(
 		model.ResourceLimits{
@@ -188,6 +191,28 @@ func (a *App) DeleteTool(toolID string) error {
 	return a.tools.DeleteTool(toolID)
 }
 
+func (a *App) UninstallTool(toolID string) (*model.UninstallResult, error) {
+	if a.uninstaller == nil {
+		return nil, fmt.Errorf("uninstaller not initialized")
+	}
+
+	err := a.sandbox.Stop(toolID)
+	if err != nil && !strings.Contains(err.Error(), "process not found") {
+		return nil, fmt.Errorf("stop running process: %w", err)
+	}
+
+	result, err := a.uninstaller.Uninstall(toolID)
+	if err != nil {
+		return result, err
+	}
+
+	if result.Success {
+		wailsRuntime.EventsEmit(a.ctx, "tool-uninstalled", toolID)
+	}
+
+	return result, nil
+}
+
 func (a *App) GetToolLogs(toolID string, limit int) ([]model.ProcessState, error) {
 	return a.logs.GetLogs(toolID, limit)
 }
@@ -206,33 +231,18 @@ func (a *App) SaveConfig(cfg config.Config) error {
 // InstallToolPackage installs a .whl or .tgz package synchronously. Prefer
 // InstallToolPackageAsync for UI feedback.
 func (a *App) InstallToolPackage(path string) error {
-	ext := strings.ToLower(filepath.Ext(path))
-	base := strings.ToLower(filepath.Base(path))
-
-	switch {
-	case ext == ".whl":
-		if _, err := exec.LookPath("uv"); err != nil {
-			return fmt.Errorf("uv 未安装，无法安装 Python 包。\n请先安装 uv：\n  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"")
-		}
-		cmd := exec.Command("uv", "tool", "install", path)
-		executil.HideWindow(cmd)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-
-	case ext == ".tgz" || strings.HasSuffix(base, ".tar.gz"):
-		if _, err := exec.LookPath("bun"); err != nil {
-			return fmt.Errorf("bun 未安装，无法安装 Node.js 包。\n请先安装 bun：\n  powershell -c \"irm bun.sh/install.ps1 | iex\"")
-		}
-		cmd := exec.Command("bun", "install", "-g", path)
-		executil.HideWindow(cmd)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-
-	default:
-		return fmt.Errorf("unsupported package type: %s (supported: .whl, .tgz)", ext)
+	cmd, _, err := a.buildPackageInstallCmd(path)
+	if err != nil {
+		return err
 	}
+	executil.HideWindow(cmd)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	_, err = a.registerLocalPackage(path)
+	return err
 }
 
 // InstallToolPackageAsync starts package installation in the background and
@@ -262,32 +272,12 @@ func (a *App) runPackageInstall(path string) {
 		})
 	}
 
-	ext := strings.ToLower(filepath.Ext(path))
-	base := strings.ToLower(filepath.Base(path))
-
 	emit("starting", "准备安装...", 0)
 
-	var cmd *exec.Cmd
-	switch {
-	case ext == ".whl":
-		if _, err := exec.LookPath("uv"); err != nil {
-			msg := "uv 未安装。\n请先安装 uv：\n  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
-			emit("error", msg, 0)
-			emitComplete(false, msg)
-			return
-		}
-		cmd = exec.Command("uv", "tool", "install", path)
-	case ext == ".tgz" || strings.HasSuffix(base, ".tar.gz"):
-		if _, err := exec.LookPath("bun"); err != nil {
-			msg := "bun 未安装。\n请先安装 bun：\n  powershell -c \"irm bun.sh/install.ps1 | iex\""
-			emit("error", msg, 0)
-			emitComplete(false, msg)
-			return
-		}
-		cmd = exec.Command("bun", "install", "-g", path)
-	default:
-		emit("error", fmt.Sprintf("不支持的包类型: %s", ext), 0)
-		emitComplete(false, fmt.Sprintf("unsupported package type: %s", ext))
+	cmd, _, err := a.buildPackageInstallCmd(path)
+	if err != nil {
+		emit("error", err.Error(), 0)
+		emitComplete(false, err.Error())
 		return
 	}
 	executil.HideWindow(cmd)
@@ -305,16 +295,102 @@ func (a *App) runPackageInstall(path string) {
 		return
 	}
 
-	emit("running", "安装完成，正在刷新工具列表...", 80)
+	emit("running", "安装完成，正在注册工具...", 80)
 
-	if a.scanner != nil {
-		if _, scanErr := a.scanner.ScanAll(); scanErr != nil {
-			emit("warning", "安装成功但刷新工具列表失败: "+scanErr.Error(), 90)
+	newTools, err := a.registerLocalPackage(path)
+	if err != nil {
+		emit("error", err.Error(), 90)
+		emitComplete(false, err.Error())
+		return
+	}
+
+	emit("running", fmt.Sprintf("已注册 %d 个新工具", len(newTools)), 100)
+	emitComplete(true, "")
+}
+
+// buildPackageInstallCmd constructs the platform-native install command for a
+// local .whl or .tgz package. It returns the command, a package type label, and
+// any validation error.
+func (a *App) buildPackageInstallCmd(path string) (*exec.Cmd, string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	base := strings.ToLower(filepath.Base(path))
+
+	switch {
+	case ext == ".whl":
+		if _, err := exec.LookPath("uv"); err != nil {
+			return nil, "", fmt.Errorf("uv 未安装，无法安装 Python 包。\n请先安装 uv：\n  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"")
+		}
+		return exec.Command("uv", "tool", "install", path), "whl", nil
+
+	case ext == ".tgz" || strings.HasSuffix(base, ".tar.gz"):
+		if _, err := exec.LookPath("bun"); err != nil {
+			return nil, "", fmt.Errorf("bun 未安装，无法安装 Node.js 包。\n请先安装 bun：\n  powershell -c \"irm bun.sh/install.ps1 | iex\"")
+		}
+		return exec.Command("bun", "install", "-g", path), "tgz", nil
+
+	default:
+		return nil, "", fmt.Errorf("unsupported package type: %s (supported: .whl, .tgz)", ext)
+	}
+}
+
+// registerLocalPackage scans for tools after a local package install, records
+// any newly discovered tools, and returns them. If no new tool is found it
+// returns an error so the caller can surface a clear failure message.
+func (a *App) registerLocalPackage(path string) ([]model.ToolInfo, error) {
+	if a.scanner == nil {
+		return nil, fmt.Errorf("scanner not initialized")
+	}
+	if a.tools == nil {
+		return nil, fmt.Errorf("tool store not initialized")
+	}
+
+	before, err := a.toolIDsSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot tools before install: %w", err)
+	}
+
+	if _, err := a.scanner.ScanAll(); err != nil {
+		return nil, fmt.Errorf("scan tools after install: %w", err)
+	}
+
+	after, err := a.tools.ListTools("all")
+	if err != nil {
+		return nil, fmt.Errorf("list tools after install: %w", err)
+	}
+
+	var newTools []model.ToolInfo
+	for _, t := range after {
+		if _, exists := before[t.ID]; !exists {
+			newTools = append(newTools, t)
 		}
 	}
 
-	emit("running", "工具列表已刷新", 100)
-	emitComplete(true, "")
+	if len(newTools) == 0 {
+		return nil, fmt.Errorf("安装成功，但未找到可注册的 Marcus 工具。请确认包包含 marcus entry point 或 marcus 配置")
+	}
+
+	if a.storeInstaller != nil {
+		for _, t := range newTools {
+			if err := a.storeInstaller.RecordInstalled(t.ID, t.Version); err != nil {
+				// Update tracking is best-effort; log but don't fail the install.
+				a.writeLog("WARNING", fmt.Sprintf("record local install %s: %v", t.ID, err))
+			}
+		}
+	}
+
+	return newTools, nil
+}
+
+func (a *App) toolIDsSnapshot() (map[string]struct{}, error) {
+	tools, err := a.tools.ListTools("all")
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]struct{}, len(tools))
+	for _, t := range tools {
+		ids[t.ID] = struct{}{}
+	}
+	return ids, nil
 }
 
 // ─── Store (Plugin Marketplace) ─────────────────────────────
@@ -355,7 +431,45 @@ func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, erro
 		return nil, fmt.Errorf("version %s not found for plugin %s", version, pluginID)
 	}
 
-	return a.storeInstaller.Install(pluginID, version, ver.DownloadURL)
+	before, err := a.toolIDsSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot tools before install: %w", err)
+	}
+
+	result, err := a.storeInstaller.Install(pluginID, version, ver.DownloadURL)
+	if err != nil || !result.Success {
+		return result, err
+	}
+
+	// Discover the newly installed tool through the runtime scanner so it
+	// appears in the toolbox immediately without requiring a manual refresh.
+	if a.scanner != nil {
+		if _, scanErr := a.scanner.ScanAll(); scanErr != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("安装包已下载，但扫描工具时失败：%v", scanErr)
+			return result, nil
+		}
+	}
+
+	after, err := a.tools.ListTools("all")
+	if err != nil {
+		return nil, fmt.Errorf("list tools after install: %w", err)
+	}
+
+	var newTools []model.ToolInfo
+	for _, t := range after {
+		if _, exists := before[t.ID]; !exists {
+			newTools = append(newTools, t)
+		}
+	}
+
+	if len(newTools) == 0 {
+		result.Success = false
+		result.Error = "安装包已下载，但未找到可注册的 Marcus 工具。请检查插件包是否包含正确的 marcus entry point。"
+		return result, nil
+	}
+
+	return result, nil
 }
 
 func (a *App) StoreCheckUpdates() ([]model.UpdateCheckResult, error) {

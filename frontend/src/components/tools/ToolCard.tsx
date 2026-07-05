@@ -1,6 +1,7 @@
 import { Code, FileCode, Clock, Scan, ImageDown, Table, Globe, Terminal, File, Pin, PinOff, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { model } from '../../../wailsjs/go/models'
+import { useI18n } from '@/hooks/useI18n'
 
 const ICON_MAP: Record<string, React.ReactNode> = {
   Code: <Code className="h-5 w-5" />,
@@ -29,6 +30,7 @@ interface ToolCardProps {
 }
 
 export function ToolCard({ tool, index, visible, onClick, isPinned, onTogglePin }: ToolCardProps) {
+  const { t } = useI18n()
   return (
     <div
       onClick={onClick}
@@ -74,7 +76,7 @@ export function ToolCard({ tool, index, visible, onClick, isPinned, onTogglePin 
             <span>·</span>
             <span className="flex items-center gap-1 text-amber-500" title={tool.health_error || ''}>
               <AlertTriangle className="h-3 w-3" />
-              不可用
+              {t('toolCard.unhealthy')}
             </span>
           </>
         )}

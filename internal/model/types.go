@@ -21,6 +21,7 @@ const (
 	SourceJS     ToolSource = "js:bun"
 	SourceBinary ToolSource = "binary:marcus"
 	SourceManual ToolSource = "manual"
+	SourceStore  ToolSource = "store"
 )
 
 // Process status
@@ -102,6 +103,7 @@ type ToolManifest struct {
 	Description  string            `json:"description,omitempty"`
 	Icon         string            `json:"icon,omitempty"`
 	Category     string            `json:"category,omitempty"`
+	Runtime      string            `json:"runtime,omitempty"` // "python" | "bun" | ""
 	Contribution ContributionType  `json:"contribution"`
 	Web          *WebManifest      `json:"web,omitempty"`
 	Terminal     *TerminalManifest `json:"terminal,omitempty"`
@@ -164,9 +166,9 @@ type ProcessState struct {
 	Status    ProcessStatus `json:"status"`
 	Port      int           `json:"port,omitempty"`
 	ExitCode  int           `json:"exit_code,omitempty"`
-	ErrorLog  string `json:"error_log,omitempty"`
-	StartedAt string `json:"started_at,omitempty"`
-	StoppedAt string `json:"stopped_at,omitempty"`
+	ErrorLog  string        `json:"error_log,omitempty"`
+	StartedAt string        `json:"started_at,omitempty"`
+	StoppedAt string        `json:"stopped_at,omitempty"`
 }
 
 type ResourceLimits struct {
@@ -215,4 +217,11 @@ type UpdateCheckResult struct {
 	CurrentVersion  string `json:"current_version"`
 	LatestVersion   string `json:"latest_version"`
 	UpdateAvailable bool   `json:"update_available"`
+}
+
+type UninstallResult struct {
+	ToolID  string `json:"tool_id"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"`
 }

@@ -1,5 +1,18 @@
 import { Component, type ReactNode } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
+import zh from '@/locales/zh-CN'
+import en from '@/locales/en-US'
+
+const LOCALE_MAP: Record<string, Record<string, string>> = { 'zh-CN': zh, 'en-US': en }
+
+function t(key: string): string {
+  try {
+    const locale = localStorage.getItem('marcus_language') || 'zh-CN'
+    return LOCALE_MAP[locale]?.[key] ?? key
+  } catch {
+    return LOCALE_MAP['zh-CN']?.[key] ?? key
+  }
+}
 
 interface Props {
   children: ReactNode
@@ -38,16 +51,16 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/10">
             <AlertTriangle className="h-7 w-7 text-destructive" />
           </div>
-          <h2 className="text-lg font-semibold">出了点问题</h2>
+          <h2 className="text-lg font-semibold">{t('errorBoundary.title')}</h2>
           <p className="max-w-md text-center text-sm text-muted-foreground">
-            {this.state.error?.message ?? '发生了未知错误'}
+            {this.state.error?.message ?? t('errorBoundary.unknownError')}
           </p>
           <button
             onClick={this.handleRetry}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
             <RefreshCw className="h-4 w-4" />
-            重试
+            {t('errorBoundary.retry')}
           </button>
         </div>
       )

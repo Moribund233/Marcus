@@ -2,6 +2,7 @@ import { FolderOpen, FileUp } from 'lucide-react'
 import { OpenFileDialog, OpenDirectoryDialog } from '../../../wailsjs/go/main/App'
 import { Button } from '@/components/ui/button'
 import type { UIInput } from '@/components/renderer/types'
+import { useI18n } from '@/hooks/useI18n'
 
 interface FormRendererProps {
   inputs: UIInput[]
@@ -10,6 +11,7 @@ interface FormRendererProps {
 }
 
 function FileInput({ input, value, onChange }: { input: UIInput; value: string; onChange: (v: string) => void }) {
+  const { t } = useI18n()
   const handleBrowse = async () => {
     const path = input.type === 'directory'
       ? await OpenDirectoryDialog()
@@ -24,11 +26,11 @@ function FileInput({ input, value, onChange }: { input: UIInput; value: string; 
         type="text"
         value={value}
         readOnly
-        placeholder={input.type === 'directory' ? '选择目录...' : '选择文件...'}
+        placeholder={input.type === 'directory' ? t('formRenderer.selectDir') : t('formRenderer.selectFile')}
       />
       <Button variant="outline" size="sm" onClick={handleBrowse}>
         {input.type === 'directory' ? <FolderOpen className="h-4 w-4" /> : <FileUp className="h-4 w-4" />}
-        浏览
+        {t('file.browse')}
       </Button>
     </div>
   )

@@ -100,9 +100,11 @@ func (s *Scanner) ScanUV() ([]model.ToolInfo, error) {
 	tools := parseUVToolList(string(out))
 	results := []model.ToolInfo{}
 
+	var errs []error
 	for _, uvTool := range tools {
 		manifest, err := s.readUvManifest(uvTool)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", uvTool.Name, err))
 			continue
 		}
 
@@ -130,7 +132,18 @@ func (s *Scanner) ScanUV() ([]model.ToolInfo, error) {
 		results = append(results, t)
 	}
 
+	if len(errs) > 0 {
+		return results, fmt.Errorf("uv scan: %s", strings.Join(errorStrings(errs), "; "))
+	}
 	return results, nil
+}
+
+func errorStrings(errs []error) []string {
+	out := make([]string, len(errs))
+	for i, e := range errs {
+		out[i] = e.Error()
+	}
+	return out
 }
 
 func parseUVToolList(output string) []uvToolInfo {
@@ -190,9 +203,9 @@ else:
 `
 	cmd := exec.Command(python, "-c", code)
 	executil.HideWindow(cmd)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("execute entry point for %s: %w", tool.Name, err)
+		return nil, fmt.Errorf("execute entry point for %s: %w\noutput:\n%s", tool.Name, err, string(output))
 	}
 
 	trimmed := strings.TrimSpace(string(output))

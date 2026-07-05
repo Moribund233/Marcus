@@ -113,7 +113,7 @@ export function StatusBar({ runtimeStatus, runtimeLoading }: StatusBarProps) {
               ) : hintKey && runtimeStatus[hintKey]?.hint ? (
                 `⚠ ${RUNTIME_LABELS[hintKey] ?? hintKey}: ${runtimeStatus[hintKey].hint!.split('\n')[0]}`
               ) : firstIssue ? (
-                `⚠ ${RUNTIME_LABELS[firstIssue] ?? firstIssue} 有可用性问题`
+                `⚠ ${RUNTIME_LABELS[firstIssue] ?? firstIssue} ${t('statusBar.hasIssues')}`
               ) : (
                 t('statusBar.ready')
               )}

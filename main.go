@@ -74,6 +74,10 @@ func (a *App) DeleteTool(toolID string) error {
 	return a.impl.DeleteTool(toolID)
 }
 
+func (a *App) UninstallTool(toolID string) (*model.UninstallResult, error) {
+	return a.impl.UninstallTool(toolID)
+}
+
 func (a *App) GetToolLogs(toolID string, limit int) ([]model.ProcessState, error) {
 	return a.impl.GetToolLogs(toolID, limit)
 }

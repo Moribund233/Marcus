@@ -115,6 +115,17 @@ func (r *Registry) GetTool(id string) (*model.ToolInfo, error) {
 }
 
 func (r *Registry) UpsertTool(t model.ToolInfo) error {
+	return upsertTool(r.db, t)
+}
+
+// UpsertToolTx performs the same upsert within an existing transaction.
+func (r *Registry) UpsertToolTx(tx *sql.Tx, t model.ToolInfo) error {
+	return upsertTool(tx, t)
+}
+
+func upsertTool(execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}, t model.ToolInfo) error {
 	manifestJSON := t.Manifest
 	if manifestJSON == "" {
 		data, _ := json.Marshal(map[string]string{"display_name": t.DisplayName})
@@ -126,7 +137,7 @@ func (r *Registry) UpsertTool(t model.ToolInfo) error {
 		enabled = 1
 	}
 
-	_, err := r.db.Exec(`
+	_, err := execer.Exec(`
 		INSERT INTO tools (id, name, display_name, description, icon, category, version, source, contribution, package_path, manifest, entry_point, enabled, last_seen, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET

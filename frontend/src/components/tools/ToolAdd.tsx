@@ -55,7 +55,7 @@ export function ToolAdd({ onAdd, onCancel, onRefresh }: ToolAddProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === 'market' && <MarketTab />}
+        {tab === 'market' && <MarketTab onInstallSuccess={onRefresh} />}
         {tab === 'install' && <InstallTab onInstalled={onRefresh} />}
         {tab === 'cli' && <CliTab onAdd={onAdd} onCancel={onCancel} />}
       </div>

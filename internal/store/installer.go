@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"Marcus/internal/executil"
 	"Marcus/internal/model"
 )
 
@@ -21,12 +22,16 @@ type Installer struct {
 	db       *sql.DB
 	registry interface {
 		UpsertTool(model.ToolInfo) error
+		UpsertToolTx(*sql.Tx, model.ToolInfo) error
 	}
 	toolsDir string
 	hc       *http.Client
 }
 
-func NewInstaller(db *sql.DB, registry interface{ UpsertTool(model.ToolInfo) error }, toolsDir string) *Installer {
+func NewInstaller(db *sql.DB, registry interface {
+	UpsertTool(model.ToolInfo) error
+	UpsertToolTx(*sql.Tx, model.ToolInfo) error
+}, toolsDir string) *Installer {
 	return &Installer{
 		db:       db,
 		registry: registry,
@@ -77,27 +82,9 @@ func (inst *Installer) Install(pluginID, version, downloadURL string) (*model.In
 		return result, fmt.Errorf("deps %s: %w", pluginID, err)
 	}
 
-	manifestJSON, _ := json.Marshal(manifest)
-	toolInfo := model.ToolInfo{
-		ID:           pluginID,
-		Name:         pluginID,
-		DisplayName:  manifest.DisplayName,
-		Description:  manifest.Description,
-		Icon:         manifest.Icon,
-		Category:     firstNonEmpty(manifest.Category, "other"),
-		Version:      version,
-		Source:       model.SourceManual,
-		Contribution: manifest.Contribution,
-		PackagePath:  installPath,
-		Manifest:     string(manifestJSON),
-		EntryPoint:   filepath.Join(installPath, "dist"),
-		Enabled:      true,
-	}
-	if err := inst.registry.UpsertTool(toolInfo); err != nil {
-		result.Error = fmt.Sprintf("register tool: %v", err)
-		return result, fmt.Errorf("register %s: %w", pluginID, err)
-	}
-
+	// Record the store installation for update checks. The actual tool entry in
+	// the tools table is created by the runtime scanner (ScanUV/ScanBun) after
+	// the package has been installed into the runtime environment.
 	_, err = inst.db.Exec(
 		`INSERT OR REPLACE INTO store_installed (plugin_id, version, installed_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
 		pluginID, version,
@@ -109,6 +96,16 @@ func (inst *Installer) Install(pluginID, version, downloadURL string) (*model.In
 
 	result.Success = true
 	return result, nil
+}
+
+// RecordInstalled records a locally installed package in store_installed so it
+// can participate in update checks.
+func (inst *Installer) RecordInstalled(pluginID, version string) error {
+	_, err := inst.db.Exec(
+		`INSERT OR REPLACE INTO store_installed (plugin_id, version, installed_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
+		pluginID, version,
+	)
+	return err
 }
 
 func (inst *Installer) downloadPackage(url string) ([]byte, error) {
@@ -201,25 +198,57 @@ func extractPackage(data []byte, dest string) error {
 func (inst *Installer) installDeps(pluginID string, manifest *model.ToolManifest) error {
 	distDir := filepath.Join(inst.toolsDir, pluginID, "dist")
 
-	switch manifest.Contribution {
-	case model.ContributionWeb, model.ContributionTerminal:
-		if hasPackageJSON(distDir) {
-			cmd := exec.Command("bun", "install")
-			cmd.Dir = distDir
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("bun install: %w", err)
-			}
+	// Determine runtime from manifest or fall back to file detection.
+	runtime := strings.ToLower(manifest.Runtime)
+	if runtime == "" {
+		switch {
+		case hasPyprojectTOML(distDir), hasRequirementsTXT(distDir):
+			runtime = "python"
+		case hasPackageJSON(distDir):
+			runtime = "bun"
 		}
-		if hasRequirementsTXT(distDir) || hasPyprojectTOML(distDir) {
-			cmd := exec.Command("uv", "pip", "install", "-r", "requirements.txt")
-			cmd.Dir = distDir
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("uv pip install: %w", err)
-			}
+	}
+
+	switch runtime {
+	case "python":
+		if _, err := exec.LookPath("uv"); err != nil {
+			return fmt.Errorf("uv not found: uv 运行时未安装，无法安装 Python 工具。请在设置中安装 uv")
+		}
+		// Install the package as a uv-managed tool so the scanner can discover it.
+		cmd := exec.Command("uv", "tool", "install", "--force", distDir)
+		executil.HideWindow(cmd)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("uv tool install failed: %w", err)
+		}
+	case "bun":
+		if _, err := exec.LookPath("bun"); err != nil {
+			return fmt.Errorf("bun not found: bun 运行时未安装，无法安装 JS 工具。请在设置中安装 bun")
+		}
+		// Install dependencies into the package directory first. A subsequent
+		// bun link only registers the directory in the global node_modules and
+		// does not fetch dependencies on its own.
+		localInstall := exec.Command("bun", "install", "--production")
+		localInstall.Dir = distDir
+		executil.HideWindow(localInstall)
+		localInstall.Stdout = os.Stdout
+		localInstall.Stderr = os.Stderr
+		if err := localInstall.Run(); err != nil {
+			return fmt.Errorf("bun install dependencies failed: %w", err)
+		}
+
+		// Link the package globally so the scanner can discover it via
+		// ~/.bun/install/global/node_modules and a shim is created in ~/.bun/bin.
+		// bun install -g <local dir> on Windows may try to copy files and fail
+		// with EPERM; bun link creates a junction instead.
+		link := exec.Command("bun", "link")
+		link.Dir = distDir
+		executil.HideWindow(link)
+		link.Stdout = os.Stdout
+		link.Stderr = os.Stderr
+		if err := link.Run(); err != nil {
+			return fmt.Errorf("bun link failed: %w", err)
 		}
 	}
 
