@@ -1,7 +1,9 @@
 package sandbox
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +19,10 @@ import (
 	"Marcus/internal/executil"
 	"Marcus/internal/model"
 )
+
+// ErrProcessNotFound is returned when a stop is requested for a tool that
+// has no tracked process.
+var ErrProcessNotFound = errors.New("process not found")
 
 type OutputHandler func(toolID string, line string)
 
@@ -67,7 +73,7 @@ func (m *Manager) Stop(toolID string) error {
 	p, ok := m.processes[toolID]
 	m.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("process not found: %s", toolID)
+		return fmt.Errorf("%w: %s", ErrProcessNotFound, toolID)
 	}
 
 	// Closing the Job Object handle triggers JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -378,20 +384,21 @@ func (m *Manager) startTerminal(manifest model.ToolManifest, args map[string]str
 }
 
 func (m *Manager) streamOutput(_ *Process, r interface{ Read([]byte) (int, error) }, toolID string) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			line := string(buf[:n])
-			if m.onOutput != nil {
-				m.onOutput(toolID, line)
-			}
-		}
-		if err != nil {
-			break
+	scanner := bufio.NewScanner(readCloser{r})
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if m.onOutput != nil {
+			m.onOutput(toolID, line)
 		}
 	}
 }
+
+// readCloser adapts io.Reader for bufio.Scanner without requiring io.Closer.
+type readCloser struct{ r interface{ Read([]byte) (int, error) } }
+
+func (rc readCloser) Read(b []byte) (int, error) { return rc.r.Read(b) }
+func (readCloser) Close() error                   { return nil }
 
 // diagnoseStartError examines an exec start error and returns a user-friendly
 // diagnostic hint with suggested fix steps.

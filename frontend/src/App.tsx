@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { TitleBar } from '@/components/title-bar'
 import { StatusBar } from '@/components/status-bar'
@@ -14,7 +14,7 @@ import { useRuntime } from '@/hooks/useRuntime'
 import { usePinnedTools } from '@/hooks/usePinnedTools'
 import { useShortcuts } from '@/hooks/useShortcuts'
 import { useI18n } from '@/hooks/useI18n'
-import { GetTools, GetConfig } from '../wailsjs/go/main/App'
+import { GetConfig } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime'
 import { model } from '../wailsjs/go/models'
 
@@ -32,7 +32,10 @@ function App() {
   const [statusMessage, setStatusMessage] = useState(t('statusBar.ready'))
   const [showToolPicker, setShowToolPicker] = useState(false)
   const [allTools, setAllTools] = useState<model.ToolInfo[]>([])
-  const { tools, loading, refresh, launch, stop, addManual, uninstall } = useTools(category)
+  const {
+    tools, loading, refresh, launch, stop, addManual, uninstall,
+    fetchAllTools, getToolById,
+  } = useTools(category)
   const { status: runtimeStatus, loading: runtimeLoading, refresh: refreshRuntime } = useRuntime()
   const { pinnedIds, togglePin, isPinned } = usePinnedTools()
 
@@ -48,30 +51,11 @@ function App() {
     }).catch((err) => console.error('GetConfig failed', err))
   }, [setLocale])
 
-  const toolCache = useRef<Record<string, model.ToolInfo>>({})
-  const MAX_CACHE = 200
-
-  // keep tool cache in sync, evict stale entries beyond MAX_CACHE
-  useEffect(() => {
-    const currentIds = new Set(tools.map((t) => t.id))
-    for (const tool of tools) {
-      toolCache.current[tool.id] = tool
-    }
-    // evict entries that are no longer in the current tool set
-    const ids = Object.keys(toolCache.current)
-    if (ids.length > MAX_CACHE) {
-      for (const id of ids) {
-        if (!currentIds.has(id)) {
-          delete toolCache.current[id]
-        }
-      }
-    }
-  }, [tools])
-
+  // Derive pinned tool objects from the cross-category cache.
   const pinnedToolObjects = pinnedIds
-    .map((id) => toolCache.current[id])
-    .filter(Boolean)
-    .filter((t) => !runningTools.find((r) => r.id === t.id)) as model.ToolInfo[]
+    .map((id) => getToolById(id))
+    .filter((t): t is model.ToolInfo => !!t)
+    .filter((t) => !runningTools.find((r) => r.id === t.id))
 
   const showStatus = useCallback((msg: string) => {
     setStatusMessage(msg)
@@ -80,7 +64,6 @@ function App() {
   }, [t])
 
   const handleSelectTool = useCallback((tool: model.ToolInfo) => {
-    toolCache.current[tool.id] = tool
     setSelectedTool(tool)
     setView('detail')
   }, [])
@@ -102,7 +85,6 @@ function App() {
   }, [refresh, showStatus])
 
   const handleToolLaunch = useCallback((tool: model.ToolInfo) => {
-    toolCache.current[tool.id] = tool
     setRunningTools((prev) => {
       if (prev.find((x) => x.id === tool.id)) return prev
       return [...prev, tool]
@@ -112,14 +94,10 @@ function App() {
 
   const handleShowToolPicker = useCallback(async () => {
     setAllTools([])
-    try {
-      const all = await GetTools('all')
-      setAllTools(all ?? [])
-    } catch (err) {
-      console.error('GetTools(all) failed', err)
-    }
+    const list = await fetchAllTools()
+    setAllTools(list)
     setShowToolPicker(true)
-  }, [])
+  }, [fetchAllTools])
 
   const handleGoBack = useCallback(() => {
     if (view !== 'grid') {
@@ -140,11 +118,11 @@ function App() {
     showStatus(t('statusBar.ready'))
   }, [showStatus])
 
-  // listen for state-change events pushed from backend (replaces polling).
+  // listen for state-change events pushed from backend
   useEffect(() => {
     const unsub = EventsOn('tool:state-changed', (data: { tool_id: string; status: string }) => {
       if (data.status === 'launching' || data.status === 'running') {
-        const cached = toolCache.current[data.tool_id]
+        const cached = getToolById(data.tool_id)
         if (cached) {
           setRunningTools((prev) =>
             prev.find((x) => x.id === data.tool_id) ? prev : [...prev, cached],
@@ -155,7 +133,7 @@ function App() {
       }
     })
     return () => unsub()
-  }, [])
+  }, [getToolById])
 
   return (
     <div className="flex h-screen flex-col bg-background">

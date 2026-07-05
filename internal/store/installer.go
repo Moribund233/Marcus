@@ -20,21 +20,13 @@ import (
 
 type Installer struct {
 	db       *sql.DB
-	registry interface {
-		UpsertTool(model.ToolInfo) error
-		UpsertToolTx(*sql.Tx, model.ToolInfo) error
-	}
 	toolsDir string
 	hc       *http.Client
 }
 
-func NewInstaller(db *sql.DB, registry interface {
-	UpsertTool(model.ToolInfo) error
-	UpsertToolTx(*sql.Tx, model.ToolInfo) error
-}, toolsDir string) *Installer {
+func NewInstaller(db *sql.DB, toolsDir string) *Installer {
 	return &Installer{
 		db:       db,
-		registry: registry,
 		toolsDir: toolsDir,
 		hc:       &http.Client{Timeout: 120 * time.Second},
 	}
@@ -78,6 +70,7 @@ func (inst *Installer) Install(pluginID, version, downloadURL string) (*model.In
 	}
 
 	if err := inst.installDeps(pluginID, manifest); err != nil {
+		os.RemoveAll(installPath)
 		result.Error = fmt.Sprintf("install deps: %v", err)
 		return result, fmt.Errorf("deps %s: %w", pluginID, err)
 	}
@@ -90,6 +83,7 @@ func (inst *Installer) Install(pluginID, version, downloadURL string) (*model.In
 		pluginID, version,
 	)
 	if err != nil {
+		os.RemoveAll(installPath)
 		result.Error = fmt.Sprintf("record install: %v", err)
 		return result, fmt.Errorf("record install %s: %w", pluginID, err)
 	}

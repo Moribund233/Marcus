@@ -1,18 +1,14 @@
 package app
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
-	"time"
 
 	"Marcus/internal/config"
-	"Marcus/internal/executil"
 	"Marcus/internal/model"
 	"Marcus/internal/runtime"
 	"Marcus/internal/sandbox"
@@ -40,6 +36,7 @@ type App struct {
 
 	logFile   *os.File
 	logFileMu sync.Mutex
+	configMu  sync.RWMutex
 }
 
 func New() *App {
@@ -64,7 +61,7 @@ func (a *App) Startup(ctx context.Context) {
 		cfg = config.Default()
 	}
 	cfg.Save(cfgPath)
-	a.cfg = cfg
+	a.setConfig(cfg)
 	a.cfgPath = cfgPath
 
 	reg, err := tools.NewRegistry(a.cfg.DBPath)
@@ -85,25 +82,28 @@ func (a *App) Startup(ctx context.Context) {
 
 	a.scanner = tools.NewScanner(reg, a.cfg.ToolsDir)
 
-	storeClient, err := store.NewClient(reg.DB())
+	storeClient, err := store.NewClient(reg.DB(), a.cfg.StoreIndexURL)
 	if err != nil {
 		a.writeLog("ERROR", "store client init: "+err.Error())
 		wailsRuntime.LogError(a.ctx, "store client init: "+err.Error())
 	} else {
 		a.storeClient = storeClient
-		a.storeInstaller = store.NewInstaller(reg.DB(), reg, a.cfg.ToolsDir)
+		a.storeInstaller = store.NewInstaller(reg.DB(), a.cfg.ToolsDir)
 		a.storeUpdater = store.NewUpdater(reg.DB())
 
-		// background sync on startup — fail silently, user can refresh manually
 		go func() {
 			if _, err := a.storeClient.Sync(); err != nil {
 				a.writeLog("DEBUG", "store initial sync skipped: "+err.Error())
 				wailsRuntime.LogDebug(a.ctx, "store initial sync skipped: "+err.Error())
 			}
 		}()
+
+		// Retry any pending store installs that failed during previous scanning.
+		go a.retryPendingInstalls()
 	}
 
-	a.uninstaller = tools.NewUninstaller(reg.DB(), a.cfg.ToolsDir)
+	a.uninstaller = tools.NewUninstaller(reg, a.cfg.ToolsDir)
+	a.uninstaller.SetLanguage(a.cfg.Language)
 
 	a.sandbox = sandbox.NewManager(
 		model.ResourceLimits{
@@ -173,10 +173,6 @@ func (a *App) GetToolState(toolID string) *model.ProcessState {
 	return a.sandbox.GetState(toolID)
 }
 
-func (a *App) GetRuntimeStatus() map[string]model.RuntimeInfo {
-	return a.rt.CheckAll()
-}
-
 func (a *App) RefreshTools() ([]model.ToolInfo, error) {
 	return a.scanner.ScanAll()
 }
@@ -197,7 +193,7 @@ func (a *App) UninstallTool(toolID string) (*model.UninstallResult, error) {
 	}
 
 	err := a.sandbox.Stop(toolID)
-	if err != nil && !strings.Contains(err.Error(), "process not found") {
+	if err != nil && !errors.Is(err, sandbox.ErrProcessNotFound) {
 		return nil, fmt.Errorf("stop running process: %w", err)
 	}
 
@@ -218,457 +214,23 @@ func (a *App) GetToolLogs(toolID string, limit int) ([]model.ProcessState, error
 }
 
 func (a *App) GetConfig() *config.Config {
+	a.configMu.RLock()
+	defer a.configMu.RUnlock()
 	return a.cfg
 }
 
 func (a *App) SaveConfig(cfg config.Config) error {
+	a.configMu.Lock()
 	a.cfg = &cfg
-	return a.cfg.Save(a.cfgPath)
-}
-
-// ─── Install Tool Package ────────────────────────────────────
-
-// InstallToolPackage installs a .whl or .tgz package synchronously. Prefer
-// InstallToolPackageAsync for UI feedback.
-func (a *App) InstallToolPackage(path string) error {
-	cmd, _, err := a.buildPackageInstallCmd(path)
-	if err != nil {
-		return err
-	}
-	executil.HideWindow(cmd)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	_, err = a.registerLocalPackage(path)
+	err := a.cfg.Save(a.cfgPath)
+	a.configMu.Unlock()
 	return err
 }
 
-// InstallToolPackageAsync starts package installation in the background and
-// pushes progress/completion events to the frontend.
-func (a *App) InstallToolPackageAsync(path string) error {
-	if a.ctx == nil {
-		return fmt.Errorf("app not started")
-	}
-	go a.runPackageInstall(path)
-	return nil
-}
-
-func (a *App) runPackageInstall(path string) {
-	emit := func(status, message string, progress int) {
-		wailsRuntime.EventsEmit(a.ctx, "install:progress", map[string]any{
-			"path":     path,
-			"status":   status,
-			"message":  message,
-			"progress": progress,
-		})
-	}
-	emitComplete := func(success bool, errMsg string) {
-		wailsRuntime.EventsEmit(a.ctx, "install:complete", map[string]any{
-			"path":    path,
-			"success": success,
-			"error":   errMsg,
-		})
-	}
-
-	emit("starting", "准备安装...", 0)
-
-	cmd, _, err := a.buildPackageInstallCmd(path)
-	if err != nil {
-		emit("error", err.Error(), 0)
-		emitComplete(false, err.Error())
-		return
-	}
-	executil.HideWindow(cmd)
-
-	emit("running", "正在执行安装命令...", 30)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := string(output)
-		if msg == "" {
-			msg = err.Error()
-		}
-		emit("error", msg, 0)
-		emitComplete(false, fmt.Sprintf("%v: %s", err, msg))
-		return
-	}
-
-	emit("running", "安装完成，正在注册工具...", 80)
-
-	newTools, err := a.registerLocalPackage(path)
-	if err != nil {
-		emit("error", err.Error(), 90)
-		emitComplete(false, err.Error())
-		return
-	}
-
-	emit("running", fmt.Sprintf("已注册 %d 个新工具", len(newTools)), 100)
-	emitComplete(true, "")
-}
-
-// buildPackageInstallCmd constructs the platform-native install command for a
-// local .whl or .tgz package. It returns the command, a package type label, and
-// any validation error.
-func (a *App) buildPackageInstallCmd(path string) (*exec.Cmd, string, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	base := strings.ToLower(filepath.Base(path))
-
-	switch {
-	case ext == ".whl":
-		if _, err := exec.LookPath("uv"); err != nil {
-			return nil, "", fmt.Errorf("uv 未安装，无法安装 Python 包。\n请先安装 uv：\n  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"")
-		}
-		return exec.Command("uv", "tool", "install", path), "whl", nil
-
-	case ext == ".tgz" || strings.HasSuffix(base, ".tar.gz"):
-		if _, err := exec.LookPath("bun"); err != nil {
-			return nil, "", fmt.Errorf("bun 未安装，无法安装 Node.js 包。\n请先安装 bun：\n  powershell -c \"irm bun.sh/install.ps1 | iex\"")
-		}
-		return exec.Command("bun", "install", "-g", path), "tgz", nil
-
-	default:
-		return nil, "", fmt.Errorf("unsupported package type: %s (supported: .whl, .tgz)", ext)
-	}
-}
-
-// registerLocalPackage scans for tools after a local package install, records
-// any newly discovered tools, and returns them. If no new tool is found it
-// returns an error so the caller can surface a clear failure message.
-func (a *App) registerLocalPackage(path string) ([]model.ToolInfo, error) {
-	if a.scanner == nil {
-		return nil, fmt.Errorf("scanner not initialized")
-	}
-	if a.tools == nil {
-		return nil, fmt.Errorf("tool store not initialized")
-	}
-
-	before, err := a.toolIDsSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("snapshot tools before install: %w", err)
-	}
-
-	if _, err := a.scanner.ScanAll(); err != nil {
-		return nil, fmt.Errorf("scan tools after install: %w", err)
-	}
-
-	after, err := a.tools.ListTools("all")
-	if err != nil {
-		return nil, fmt.Errorf("list tools after install: %w", err)
-	}
-
-	var newTools []model.ToolInfo
-	for _, t := range after {
-		if _, exists := before[t.ID]; !exists {
-			newTools = append(newTools, t)
-		}
-	}
-
-	if len(newTools) == 0 {
-		return nil, fmt.Errorf("安装成功，但未找到可注册的 Marcus 工具。请确认包包含 marcus entry point 或 marcus 配置")
-	}
-
-	if a.storeInstaller != nil {
-		for _, t := range newTools {
-			if err := a.storeInstaller.RecordInstalled(t.ID, t.Version); err != nil {
-				// Update tracking is best-effort; log but don't fail the install.
-				a.writeLog("WARNING", fmt.Sprintf("record local install %s: %v", t.ID, err))
-			}
-		}
-	}
-
-	return newTools, nil
-}
-
-func (a *App) toolIDsSnapshot() (map[string]struct{}, error) {
-	tools, err := a.tools.ListTools("all")
-	if err != nil {
-		return nil, err
-	}
-	ids := make(map[string]struct{}, len(tools))
-	for _, t := range tools {
-		ids[t.ID] = struct{}{}
-	}
-	return ids, nil
-}
-
-// ─── Store (Plugin Marketplace) ─────────────────────────────
-
-func (a *App) StoreSync() (*model.StoreIndex, error) {
-	if a.storeClient == nil {
-		return nil, fmt.Errorf("store not initialized")
-	}
-	return a.storeClient.Sync()
-}
-
-func (a *App) StoreListPlugins() ([]model.StorePlugin, error) {
-	if a.storeClient == nil {
-		return nil, fmt.Errorf("store not initialized")
-	}
-	return a.storeClient.ListPlugins()
-}
-
-func (a *App) StoreSearchPlugins(query string) ([]model.StorePlugin, error) {
-	if a.storeClient == nil {
-		return nil, fmt.Errorf("store not initialized")
-	}
-	return a.storeClient.SearchPlugins(query)
-}
-
-func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, error) {
-	if a.storeInstaller == nil {
-		return nil, fmt.Errorf("store not initialized")
-	}
-
-	plugin, err := a.storeClient.GetCachedPlugin(pluginID)
-	if err != nil {
-		return nil, fmt.Errorf("lookup plugin: %w", err)
-	}
-
-	ver, ok := plugin.Versions[version]
-	if !ok {
-		return nil, fmt.Errorf("version %s not found for plugin %s", version, pluginID)
-	}
-
-	before, err := a.toolIDsSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("snapshot tools before install: %w", err)
-	}
-
-	result, err := a.storeInstaller.Install(pluginID, version, ver.DownloadURL)
-	if err != nil || !result.Success {
-		return result, err
-	}
-
-	// Discover the newly installed tool through the runtime scanner so it
-	// appears in the toolbox immediately without requiring a manual refresh.
-	if a.scanner != nil {
-		if _, scanErr := a.scanner.ScanAll(); scanErr != nil {
-			result.Success = false
-			result.Error = fmt.Sprintf("安装包已下载，但扫描工具时失败：%v", scanErr)
-			return result, nil
-		}
-	}
-
-	after, err := a.tools.ListTools("all")
-	if err != nil {
-		return nil, fmt.Errorf("list tools after install: %w", err)
-	}
-
-	var newTools []model.ToolInfo
-	for _, t := range after {
-		if _, exists := before[t.ID]; !exists {
-			newTools = append(newTools, t)
-		}
-	}
-
-	if len(newTools) == 0 {
-		result.Success = false
-		result.Error = "安装包已下载，但未找到可注册的 Marcus 工具。请检查插件包是否包含正确的 marcus entry point。"
-		return result, nil
-	}
-
-	return result, nil
-}
-
-func (a *App) StoreCheckUpdates() ([]model.UpdateCheckResult, error) {
-	if a.storeUpdater == nil {
-		return nil, fmt.Errorf("store not initialized")
-	}
-	return a.storeUpdater.CheckUpdates()
-}
-
-func (a *App) StoreHasUpdates() (bool, error) {
-	if a.storeUpdater == nil {
-		return false, fmt.Errorf("store not initialized")
-	}
-	return a.storeUpdater.HasUpdates()
-}
-
-// ─── Runtime Installation ────────────────────────────────────
-
-// InstallRuntime installs a runtime (uv or bun) synchronously using the
-// language-native package manager (pip for uv, npm for bun).
-func (a *App) InstallRuntime(runtimeName string) error {
-	switch runtimeName {
-	case "uv":
-		if _, err := exec.LookPath("uv"); err == nil {
-			return nil
-		}
-		if _, err := exec.LookPath("pip"); err != nil {
-			return fmt.Errorf("pip 未安装，无法安装 uv。请先安装 Python pip")
-		}
-		cmd := exec.Command("pip", "install", "uv")
-		executil.HideWindow(cmd)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-
-	case "bun":
-		if _, err := exec.LookPath("bun"); err == nil {
-			return nil
-		}
-		if _, err := exec.LookPath("npm"); err != nil {
-			return fmt.Errorf("npm 未安装，无法安装 bun。请先安装 Node.js npm")
-		}
-		cmd := exec.Command("npm", "install", "-g", "bun")
-		executil.HideWindow(cmd)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-
-	default:
-		return fmt.Errorf("unknown runtime: %s (supported: uv, bun)", runtimeName)
-	}
-}
-
-// InstallRuntimeAsync starts runtime installation in the background and pushes
-// progress/completion events to the frontend.
-func (a *App) InstallRuntimeAsync(runtimeName string) error {
-	if a.ctx == nil {
-		return fmt.Errorf("app not started")
-	}
-	go a.runRuntimeInstall(runtimeName)
-	return nil
-}
-
-func (a *App) runRuntimeInstall(runtimeName string) {
-	emit := func(status, message string, progress int) {
-		wailsRuntime.EventsEmit(a.ctx, "runtime:install-progress", map[string]any{
-			"runtime":  runtimeName,
-			"status":   status,
-			"message":  message,
-			"progress": progress,
-		})
-	}
-	emitComplete := func(success bool, errMsg string) {
-		wailsRuntime.EventsEmit(a.ctx, "runtime:install-complete", map[string]any{
-			"runtime": runtimeName,
-			"success": success,
-			"error":   errMsg,
-		})
-	}
-
-	// Check if already installed.
-	switch runtimeName {
-	case "uv":
-		if _, err := exec.LookPath("uv"); err == nil {
-			emit("done", "uv 已安装", 100)
-			emitComplete(true, "")
-			return
-		}
-	case "bun":
-		if _, err := exec.LookPath("bun"); err == nil {
-			emit("done", "bun 已安装", 100)
-			emitComplete(true, "")
-			return
-		}
-	default:
-		emit("error", fmt.Sprintf("不支持运行时: %s", runtimeName), 0)
-		emitComplete(false, fmt.Sprintf("unknown runtime: %s", runtimeName))
-		return
-	}
-
-	emit("starting", "正在准备安装...", 0)
-
-	var cmd *exec.Cmd
-	var label string
-	switch runtimeName {
-	case "uv":
-		if _, err := exec.LookPath("pip"); err != nil {
-			msg := "pip 未安装，无法安装 uv。请先安装 Python pip"
-			emit("error", msg, 0)
-			emitComplete(false, msg)
-			return
-		}
-		cmd = exec.Command("pip", "install", "uv")
-		label = "uv"
-	case "bun":
-		if _, err := exec.LookPath("npm"); err != nil {
-			msg := "npm 未安装，无法安装 bun。请先安装 Node.js npm"
-			emit("error", msg, 0)
-			emitComplete(false, msg)
-			return
-		}
-		cmd = exec.Command("npm", "install", "-g", "bun")
-		label = "bun"
-	}
-	executil.HideWindow(cmd)
-
-	emit("running", fmt.Sprintf("正在通过 %s 安装 %s...",
-		map[string]string{"uv": "pip", "bun": "npm"}[runtimeName], label), 30)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := string(output)
-		if msg == "" {
-			msg = err.Error()
-		}
-		emit("error", msg, 0)
-		emitComplete(false, msg)
-		return
-	}
-
-	emit("done", fmt.Sprintf("%s 安装成功", label), 100)
-	emitComplete(true, "")
-}
-
-// ─── App Logging ─────────────────────────────────────────────
-
-func (a *App) writeLog(level, msg string) {
-	a.logFileMu.Lock()
-	defer a.logFileMu.Unlock()
-	if a.logFile != nil {
-		fmt.Fprintf(a.logFile, "[%s] %s: %s\n", time.Now().Format(time.DateTime), level, msg)
-	}
-}
-
-func (a *App) GetAppLogs(count int) ([]string, error) {
-	if a.cfgPath == "" {
-		return nil, nil
-	}
-	logPath := filepath.Join(filepath.Dir(a.cfgPath), "app.log")
-	f, err := os.Open(logPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(lines) > count {
-		lines = lines[len(lines)-count:]
-	}
-	return lines, nil
-}
-
-// ─── File Dialogs ────────────────────────────────────────────
-
-func (a *App) OpenFileDialog(filter string) (string, error) {
-	path, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-		Filters: []wailsRuntime.FileFilter{
-			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func (a *App) OpenDirectoryDialog() (string, error) {
-	path, err := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-		Title: "选择目录",
-	})
-	if err != nil {
-		return "", err
-	}
-	return path, nil
+// setConfig is an internal helper that replaces the config pointer while holding
+// the write lock. Used during startup where external callers are not yet active.
+func (a *App) setConfig(cfg *config.Config) {
+	a.configMu.Lock()
+	a.cfg = cfg
+	a.configMu.Unlock()
 }

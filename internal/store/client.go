@@ -12,18 +12,20 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const defaultIndexURL = "https://raw.githubusercontent.com/Moribund233/Marcus-plugins/master/index.json"
-
 type Client struct {
 	db       *sql.DB
 	indexURL string
 	hc       *http.Client
 }
 
-func NewClient(db *sql.DB) (*Client, error) {
+func NewClient(db *sql.DB, indexURL ...string) (*Client, error) {
+	url := "https://raw.githubusercontent.com/Moribund233/Marcus-plugins/master/index.json"
+	if len(indexURL) > 0 && indexURL[0] != "" {
+		url = indexURL[0]
+	}
 	c := &Client{
 		db:       db,
-		indexURL: defaultIndexURL,
+		indexURL: url,
 		hc:       &http.Client{Timeout: 30 * time.Second},
 	}
 	if err := c.migrate(); err != nil {
@@ -51,8 +53,48 @@ func (c *Client) migrate() error {
 			installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (plugin_id) REFERENCES store_cache(id)
 		);
+		CREATE TABLE IF NOT EXISTS pending_store_install (
+			plugin_id   TEXT PRIMARY KEY,
+			version     TEXT NOT NULL,
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
 	`)
 	return err
+}
+
+// RecordPendingInstall records a plugin whose download+install succeeded but
+// whose scanner discovery failed. The entry is retried on the next scan.
+func (c *Client) RecordPendingInstall(pluginID, version string) error {
+	_, err := c.db.Exec(
+		`INSERT OR REPLACE INTO pending_store_install (plugin_id, version) VALUES (?, ?)`,
+		pluginID, version,
+	)
+	return err
+}
+
+// ClearPendingInstall removes a pending entry after a successful scan.
+func (c *Client) ClearPendingInstall(pluginID string) error {
+	_, err := c.db.Exec(`DELETE FROM pending_store_install WHERE plugin_id = ?`, pluginID)
+	return err
+}
+
+// ListPendingInstalls returns all pending installs that should be retried.
+func (c *Client) ListPendingInstalls() ([]struct{ PluginID, Version string }, error) {
+	rows, err := c.db.Query(`SELECT plugin_id, version FROM pending_store_install`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []struct{ PluginID, Version string }
+	for rows.Next() {
+		var r struct{ PluginID, Version string }
+		if err := rows.Scan(&r.PluginID, &r.Version); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }
 
 // Sync fetches the remote index and updates the local cache.

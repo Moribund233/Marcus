@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"Marcus/internal/executil"
@@ -20,8 +21,9 @@ import (
 const maxIDLen = 48
 
 type Scanner struct {
-	registry *Registry
-	toolsDir string
+	registry     *Registry
+	toolsDir     string
+	uvCache      sync.Map
 }
 
 func NewScanner(registry *Registry, toolsDir string) *Scanner {
@@ -39,30 +41,54 @@ func toolID(name, source string) string {
 	return fmt.Sprintf("%s:%s", source, slug)
 }
 
+type scanResult struct {
+	tools []model.ToolInfo
+	err   error
+}
+
 func (s *Scanner) ScanAll() ([]model.ToolInfo, error) {
-	all := []model.ToolInfo{}
-	var errs []string
+	var (
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+		all  []model.ToolInfo
+		errs []string
+	)
 
-	uvTools, err := s.ScanUV()
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("uv: %v", err))
-	} else {
-		all = append(all, uvTools...)
-	}
-
-	bunTools, err := s.ScanBun()
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("bun: %v", err))
-	} else {
-		all = append(all, bunTools...)
-	}
-
-	binTools, err := s.ScanBinary()
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("binary: %v", err))
-	} else {
-		all = append(all, binTools...)
-	}
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		tools, err := s.ScanUV()
+		mu.Lock()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("uv: %v", err))
+		} else {
+			all = append(all, tools...)
+		}
+		mu.Unlock()
+	}()
+	go func() {
+		defer wg.Done()
+		tools, err := s.ScanBun()
+		mu.Lock()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("bun: %v", err))
+		} else {
+			all = append(all, tools...)
+		}
+		mu.Unlock()
+	}()
+	go func() {
+		defer wg.Done()
+		tools, err := s.ScanBinary()
+		mu.Lock()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("binary: %v", err))
+		} else {
+			all = append(all, tools...)
+		}
+		mu.Unlock()
+	}()
+	wg.Wait()
 
 	for _, t := range all {
 		if err := s.registry.UpsertTool(t); err != nil {
@@ -185,11 +211,28 @@ func (s *Scanner) readUvManifest(tool uvToolInfo) (*model.ToolManifest, error) {
 		return nil, fmt.Errorf("no env path for %s", tool.Name)
 	}
 
+	// Return cached manifest if available. The cache survives across ScanUV calls
+	// so repeated scans after initial discovery avoid spawning Python for every tool.
+	type cacheEntry struct {
+		m   model.ToolManifest
+		err error
+	}
+	cacheKey := tool.Name + "|" + tool.EnvPath
+	if cached, ok := s.uvCache.Load(cacheKey); ok {
+		entry := cached.(cacheEntry)
+		if entry.err != nil {
+			return nil, entry.err
+		}
+		return &entry.m, nil
+	}
+
 	python := filepath.Join(tool.EnvPath, "Scripts", "python.exe")
 	if _, err := os.Stat(python); err != nil {
 		python = filepath.Join(tool.EnvPath, "bin", "python")
 		if _, err := os.Stat(python); err != nil {
-			return nil, fmt.Errorf("python not found in env %s", tool.EnvPath)
+			err := fmt.Errorf("python not found in env %s", tool.EnvPath)
+			s.uvCache.Store(cacheKey, cacheEntry{err: err})
+			return nil, err
 		}
 	}
 
@@ -205,21 +248,31 @@ else:
 	executil.HideWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("execute entry point for %s: %w\noutput:\n%s", tool.Name, err, string(output))
+		err := fmt.Errorf("execute entry point for %s: %w\noutput:\n%s", tool.Name, err, string(output))
+		s.uvCache.Store(cacheKey, cacheEntry{err: err})
+		return nil, err
 	}
 
 	trimmed := strings.TrimSpace(string(output))
 	if trimmed == "NO_MARCUS_ENTRYPOINT" {
-		return nil, fmt.Errorf("no marcus entry point for %s", tool.Name)
+		err := fmt.Errorf("no marcus entry point for %s", tool.Name)
+		s.uvCache.Store(cacheKey, cacheEntry{err: err})
+		return nil, err
 	}
 
 	var m model.ToolManifest
 	if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
-		return nil, fmt.Errorf("parse manifest for %s: %w", tool.Name, err)
+		err := fmt.Errorf("parse manifest for %s: %w", tool.Name, err)
+		s.uvCache.Store(cacheKey, cacheEntry{err: err})
+		return nil, err
 	}
 	if m.DisplayName == "" {
-		return nil, fmt.Errorf("manifest missing display_name")
+		err := fmt.Errorf("manifest missing display_name")
+		s.uvCache.Store(cacheKey, cacheEntry{err: err})
+		return nil, err
 	}
+
+	s.uvCache.Store(cacheKey, cacheEntry{m: m})
 	return &m, nil
 }
 

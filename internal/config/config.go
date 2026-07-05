@@ -19,6 +19,7 @@ type Config struct {
 	TerminateOnExit bool   `json:"terminate_on_exit"`
 	Theme           string `json:"theme"`
 	Language        string `json:"language"`
+	StoreIndexURL   string `json:"store_index_url"`
 }
 
 func Default() *Config {
@@ -38,6 +39,7 @@ func Default() *Config {
 		TerminateOnExit: true,
 		Theme:           "dark",
 		Language:        "zh-CN",
+		StoreIndexURL:   "https://raw.githubusercontent.com/Moribund233/Marcus-plugins/master/index.json",
 	}
 }
 

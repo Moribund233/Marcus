@@ -118,11 +118,6 @@ func (r *Registry) UpsertTool(t model.ToolInfo) error {
 	return upsertTool(r.db, t)
 }
 
-// UpsertToolTx performs the same upsert within an existing transaction.
-func (r *Registry) UpsertToolTx(tx *sql.Tx, t model.ToolInfo) error {
-	return upsertTool(tx, t)
-}
-
 func upsertTool(execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }, t model.ToolInfo) error {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   GetTools,
   LaunchTool,
@@ -18,18 +18,44 @@ export function useTools(category: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Cross-category cache: accumulates all seen tools so pinned tools
+  // and the command palette can resolve any tool regardless of the
+  // current category filter.
+  const toolsById = useRef<Map<string, model.ToolInfo>>(new Map())
+
+  // Merge incoming tools into the cross-category cache.
+  const mergeIntoCache = useCallback((incoming: model.ToolInfo[]) => {
+    for (const t of incoming) {
+      toolsById.current.set(t.id, t)
+    }
+  }, [])
+
+  // Evict entries that are no longer in the active tool set once the
+  // cache exceeds a reasonable size.
+  useEffect(() => {
+    if (toolsById.current.size <= 300) return
+    const activeIds = new Set(tools.map((t) => t.id))
+    for (const id of toolsById.current.keys()) {
+      if (!activeIds.has(id)) {
+        toolsById.current.delete(id)
+      }
+    }
+  }, [tools])
+
   const fetch = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const result = await GetTools(category)
-      setTools(result ?? [])
+      const list = result ?? []
+      setTools(list)
+      mergeIntoCache(list)
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [category])
+  }, [category, mergeIntoCache])
 
   useEffect(() => {
     fetch()
@@ -39,13 +65,15 @@ export function useTools(category: string) {
     setLoading(true)
     try {
       const result = await RefreshTools()
-      setTools(result ?? [])
+      const list = result ?? []
+      setTools(list)
+      mergeIntoCache(list)
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [mergeIntoCache])
 
   const launch = useCallback(async (id: string, args: Record<string, string> = {}) => {
     return await LaunchTool(id, args)
@@ -62,11 +90,13 @@ export function useTools(category: string) {
   const remove = useCallback(async (id: string) => {
     await DeleteTool(id)
     setTools((prev) => prev.filter((t) => t.id !== id))
+    toolsById.current.delete(id)
   }, [])
 
   const addManual = useCallback(async (name: string, command: string, argType: string) => {
     const tool = await AddManualTool(name, command, argType)
     setTools((prev) => [...prev, tool])
+    toolsById.current.set(tool.id, tool)
     return tool
   }, [])
 
@@ -78,13 +108,39 @@ export function useTools(category: string) {
     const result = await UninstallTool(id)
     if (result.success) {
       setTools((prev) => prev.filter((t) => t.id !== id))
+      toolsById.current.delete(id)
     }
     return result
+  }, [])
+
+  // Fetch all tools (for the command palette) without changing the
+  // current category view. Results are merged into the cache.
+  const fetchAllTools = useCallback(async () => {
+    try {
+      const all = await GetTools('all')
+      const list = all ?? []
+      mergeIntoCache(list)
+      return list
+    } catch (e) {
+      console.error('GetTools(all) failed', e)
+      return []
+    }
+  }, [mergeIntoCache])
+
+  // Look up a tool by ID from the cross-category cache.
+  const getToolById = useCallback((id: string) => {
+    return toolsById.current.get(id)
+  }, [])
+
+  // All known tools as an array (for the picker).
+  const allKnownTools = useCallback(() => {
+    return Array.from(toolsById.current.values())
   }, [])
 
   useEffect(() => {
     const unsub = EventsOn('tool-uninstalled', (toolID: string) => {
       setTools((prev) => prev.filter((t) => t.id !== toolID))
+      toolsById.current.delete(toolID)
     })
     return () => unsub()
   }, [])
@@ -102,5 +158,8 @@ export function useTools(category: string) {
     addManual,
     getLogs,
     uninstall,
+    fetchAllTools,
+    getToolById,
+    allKnownTools,
   }
 }

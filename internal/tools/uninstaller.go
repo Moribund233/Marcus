@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,18 +11,24 @@ import (
 )
 
 type Uninstaller struct {
-	db       *sql.DB
+	registry *Registry
 	toolsDir string
+	lang     string
 }
 
-func NewUninstaller(db *sql.DB, toolsDir string) *Uninstaller {
-	return &Uninstaller{db: db, toolsDir: toolsDir}
+func NewUninstaller(registry *Registry, toolsDir string) *Uninstaller {
+	return &Uninstaller{registry: registry, toolsDir: toolsDir, lang: "zh-CN"}
+}
+
+// SetLanguage updates the language used for user-facing messages.
+func (u *Uninstaller) SetLanguage(lang string) {
+	u.lang = lang
 }
 
 func (u *Uninstaller) Uninstall(toolID string) (*model.UninstallResult, error) {
 	result := &model.UninstallResult{ToolID: toolID}
 
-	tool, err := getToolInfo(u.db, toolID)
+	tool, err := u.registry.GetTool(toolID)
 	if err != nil {
 		result.Error = fmt.Sprintf("tool not found: %v", err)
 		return result, fmt.Errorf("find tool %s: %w", toolID, err)
@@ -66,7 +71,7 @@ func (u *Uninstaller) uninstallStore(tool *model.ToolInfo) (*model.UninstallResu
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("已卸载工具 %s", tool.DisplayName)
+	result.Message = model.Localize(u.lang, "uninstall.store.unregistered", tool.DisplayName)
 	return result, nil
 }
 
@@ -74,7 +79,7 @@ func (u *Uninstaller) uninstallUV(tool *model.ToolInfo) (*model.UninstallResult,
 	result := &model.UninstallResult{ToolID: tool.ID}
 
 	if _, err := exec.LookPath("uv"); err != nil {
-		result.Error = "uv 未安装，无法通过包管理器卸载。已从工具列表移除，建议手动清理 uv 环境"
+		result.Error = model.Localize(u.lang, "uninstall.uv.notFound")
 		return u.deleteFromRegistryOnly(tool, result)
 	}
 
@@ -104,7 +109,7 @@ func (u *Uninstaller) uninstallUV(tool *model.ToolInfo) (*model.UninstallResult,
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("已通过 uv 卸载工具 %s", tool.DisplayName)
+	result.Message = model.Localize(u.lang, "uninstall.uv.success", tool.DisplayName)
 	return result, nil
 }
 
@@ -112,7 +117,7 @@ func (u *Uninstaller) uninstallBun(tool *model.ToolInfo) (*model.UninstallResult
 	result := &model.UninstallResult{ToolID: tool.ID}
 
 	if _, err := exec.LookPath("bun"); err != nil {
-		result.Error = "bun 未安装，无法通过包管理器卸载。已从工具列表移除，建议手动清理 bun 环境"
+		result.Error = model.Localize(u.lang, "uninstall.bun.notFound")
 		return u.deleteFromRegistryOnly(tool, result)
 	}
 
@@ -142,7 +147,7 @@ func (u *Uninstaller) uninstallBun(tool *model.ToolInfo) (*model.UninstallResult
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("已通过 bun 卸载工具 %s", tool.DisplayName)
+	result.Message = model.Localize(u.lang, "uninstall.bun.success", tool.DisplayName)
 	return result, nil
 }
 
@@ -155,7 +160,7 @@ func (u *Uninstaller) uninstallBinary(tool *model.ToolInfo) (*model.UninstallRes
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("已从工具列表移除 %s。原始文件未删除，请手动清理", tool.DisplayName)
+	result.Message = model.Localize(u.lang, "uninstall.binary.success", tool.DisplayName)
 	return result, nil
 }
 
@@ -168,7 +173,7 @@ func (u *Uninstaller) uninstallManual(tool *model.ToolInfo) (*model.UninstallRes
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("已移除手动添加的工具 %s", tool.DisplayName)
+	result.Message = model.Localize(u.lang, "uninstall.manual.success", tool.DisplayName)
 	return result, nil
 }
 
@@ -181,7 +186,7 @@ func (u *Uninstaller) uninstallGeneric(tool *model.ToolInfo) (*model.UninstallRe
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("已从工具列表移除 %s", tool.DisplayName)
+	result.Message = model.Localize(u.lang, "uninstall.generic.success", tool.DisplayName)
 	return result, nil
 }
 
@@ -201,32 +206,10 @@ func (u *Uninstaller) deleteFromRegistryOnly(tool *model.ToolInfo, result *model
 }
 
 func (u *Uninstaller) deleteFromRegistry(toolID string) error {
-	_, err := u.db.Exec("DELETE FROM tools WHERE id = ?", toolID)
-	return err
+	return u.registry.DeleteTool(toolID)
 }
 
 func (u *Uninstaller) deleteFromStoreInstalled(toolID string) error {
-	_, err := u.db.Exec("DELETE FROM store_installed WHERE plugin_id = ?", toolID)
+	_, err := u.registry.DB().Exec("DELETE FROM store_installed WHERE plugin_id = ?", toolID)
 	return err
-}
-
-func getToolInfo(db *sql.DB, toolID string) (*model.ToolInfo, error) {
-	var t model.ToolInfo
-	var enabled int
-
-	err := db.QueryRow(`
-		SELECT id, name, display_name, description, icon, category, version, source,
-		       contribution, package_path, manifest, entry_point, enabled
-		FROM tools WHERE id = ?
-	`, toolID).Scan(
-		&t.ID, &t.Name, &t.DisplayName, &t.Description,
-		&t.Icon, &t.Category, &t.Version, &t.Source,
-		&t.Contribution, &t.PackagePath, &t.Manifest,
-		&t.EntryPoint, &enabled,
-	)
-	if err != nil {
-		return nil, err
-	}
-	t.Enabled = enabled != 0
-	return &t, nil
 }
