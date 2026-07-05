@@ -18,12 +18,12 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:            "Marcus",
-		Width:            1024,
-		Height:           768,
-		Frameless:        true,
-		CSSDragProperty:  "--wails-draggable",
-		CSSDragValue:     "drag",
+		Title:           "Marcus",
+		Width:           1024,
+		Height:          768,
+		Frameless:       true,
+		CSSDragProperty: "--wails-draggable",
+		CSSDragValue:    "drag",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -82,10 +82,48 @@ func (a *App) InstallToolPackage(path string) error {
 	return a.impl.InstallToolPackage(path)
 }
 
+func (a *App) InstallToolPackageAsync(path string) error {
+	return a.impl.InstallToolPackageAsync(path)
+}
+
 func (a *App) GetConfig() *config.Config {
 	return a.impl.GetConfig()
 }
 
 func (a *App) SaveConfig(cfg config.Config) error {
 	return a.impl.SaveConfig(cfg)
+}
+
+// ─── Store (Plugin Marketplace) ──────────────────────────────
+
+func (a *App) StoreSync() (*model.StoreIndex, error) {
+	return a.impl.StoreSync()
+}
+
+func (a *App) StoreListPlugins() ([]model.StorePlugin, error) {
+	return a.impl.StoreListPlugins()
+}
+
+func (a *App) StoreSearchPlugins(query string) ([]model.StorePlugin, error) {
+	return a.impl.StoreSearchPlugins(query)
+}
+
+func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, error) {
+	return a.impl.StoreInstall(pluginID, version)
+}
+
+func (a *App) StoreCheckUpdates() ([]model.UpdateCheckResult, error) {
+	return a.impl.StoreCheckUpdates()
+}
+
+func (a *App) StoreHasUpdates() (bool, error) {
+	return a.impl.StoreHasUpdates()
+}
+
+func (a *App) InstallRuntime(runtimeName string) error {
+	return a.impl.InstallRuntime(runtimeName)
+}
+
+func (a *App) InstallRuntimeAsync(runtimeName string) error {
+	return a.impl.InstallRuntimeAsync(runtimeName)
 }

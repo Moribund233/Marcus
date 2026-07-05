@@ -1,4 +1,4 @@
-import { Code, FileCode, Clock, Scan, ImageDown, Table, Globe, Terminal, File, Pin, PinOff } from 'lucide-react'
+import { Code, FileCode, Clock, Scan, ImageDown, Table, Globe, Terminal, File, Pin, PinOff, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { model } from '../../../wailsjs/go/models'
 
@@ -69,6 +69,15 @@ export function ToolCard({ tool, index, visible, onClick, isPinned, onTogglePin 
       )}
       <div className="mt-auto flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground/60">
         <span>{tool.source}</span>
+        {'healthy' in tool && tool.healthy === false && (
+          <>
+            <span>·</span>
+            <span className="flex items-center gap-1 text-amber-500" title={tool.health_error || ''}>
+              <AlertTriangle className="h-3 w-3" />
+              不可用
+            </span>
+          </>
+        )}
         <span>·</span>
         <span>{tool.contribution}</span>
       </div>

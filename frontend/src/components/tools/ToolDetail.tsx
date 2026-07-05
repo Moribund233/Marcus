@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Play, Square, Terminal, Globe, File, FolderOpen, FileUp } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, Play, Square, Terminal, Globe, File, FolderOpen, FileUp } from 'lucide-react'
 import { model } from '../../../wailsjs/go/models'
 import { EventsOn } from '../../../wailsjs/runtime'
 import { OpenFileDialog, OpenDirectoryDialog } from '../../../wailsjs/go/main/App'
@@ -19,7 +19,6 @@ interface ToolDetailProps {
   onStop: (id: string) => Promise<void>
   onToolLaunch: (tool: model.ToolInfo) => void
   onToolStop: (toolId: string) => void
-  pollState: (id: string) => Promise<model.ProcessState>
 }
 
 interface ArgField {
@@ -29,10 +28,11 @@ interface ArgField {
   default?: unknown
 }
 
-export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToolStop, pollState }: ToolDetailProps) {
+export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToolStop }: ToolDetailProps) {
   const { t } = useI18n()
   const [state, setState] = useState<model.ProcessState | null>(null)
   const [output, setOutput] = useState<string[]>([])
+  const MAX_OUTPUT_LINES = 1000
   const [args, setArgs] = useState<Record<string, string>>({})
   const [progress, setProgress] = useState(0)
   const [polling, setPolling] = useState(false)
@@ -49,31 +49,37 @@ export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToo
   useEffect(() => {
     const unsub = EventsOn('tool:output', (data: { tool_id: string; line: string }) => {
       if (data.tool_id === tool.id) {
-        setOutput((prev) => [...prev, data.line])
+        setOutput((prev) => {
+          if (prev.length >= MAX_OUTPUT_LINES) {
+            return [...prev.slice(-MAX_OUTPUT_LINES / 2), data.line]
+          }
+          return [...prev, data.line]
+        })
       }
     })
     return () => unsub()
   }, [tool.id])
 
-  // poll state while running
+  // listen to backend-pushed state changes (replaces polling).
   useEffect(() => {
-    if (!polling) return
-    const id = setInterval(async () => {
-      try {
-        const s = await pollState(tool.id)
-        setState(s)
-        if (s.status === 'exited' || s.status === 'crashed') {
-          setPolling(false)
-          clearInterval(id)
-          onToolStop(tool.id)
-        }
-      } catch {
+    const unsub = EventsOn('tool:state-changed', (data: { tool_id: string; status: string; exit_code?: number; error?: string }) => {
+      if (data.tool_id !== tool.id) return
+      setState((prev) => {
+        if (!prev) return null
+        return model.ProcessState.createFrom({
+          ...prev,
+          status: data.status,
+          exit_code: data.exit_code ?? 0,
+          error_log: data.error ?? '',
+        })
+      })
+      if (data.status === 'exited' || data.status === 'crashed') {
         setPolling(false)
-        clearInterval(id)
+        onToolStop(tool.id)
       }
-    }, 1000)
-    return () => clearInterval(id)
-  }, [polling, tool.id, pollState, onToolStop])
+    })
+    return () => unsub()
+  }, [tool.id, onToolStop])
 
   const setArg = (name: string, value: string) => {
     setArgs((prev) => ({ ...prev, [name]: value }))
@@ -151,6 +157,20 @@ export function ToolDetail({ tool, onBack, onLaunch, onStop, onToolLaunch, onToo
       <div className="flex flex-1 flex-col gap-6 p-6">
         {tool.description && (
           <p className="text-sm text-muted-foreground">{tool.description}</p>
+        )}
+
+        {'healthy' in tool && tool.healthy === false && tool.health_error && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <div className="text-sm">
+                <p className="font-medium text-amber-600">{tool.health_error}</p>
+                {tool.health_hint && (
+                  <pre className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">{tool.health_hint}</pre>
+                )}
+              </div>
+            </div>
+          </div>
         )}
 
         {manifest?.ui?.inputs && manifest.ui.inputs.length > 0 && (

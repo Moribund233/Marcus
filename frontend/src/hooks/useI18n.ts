@@ -17,10 +17,12 @@ function getStoredLocale(): string {
   }
 }
 
+type I18nKey = keyof typeof zh
+
 export function useI18n() {
   const [locale, setLocaleState] = useState(getStoredLocale)
 
-  const t = useCallback((key: string, params?: Record<string, string | number>) => {
+  const t = useCallback((key: I18nKey, params?: Record<string, string | number>) => {
     const msg = LOCALE_MAP[locale]?.[key]
     if (msg === undefined) return key
     if (!params) return msg

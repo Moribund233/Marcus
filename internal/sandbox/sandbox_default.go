@@ -2,6 +2,10 @@
 
 package sandbox
 
-func assignToJob(pid int) error {
-	return nil
+import "Marcus/internal/model"
+
+// assignToJob is a no-op on non-Windows platforms; there is no Job Object
+// equivalent to return.
+func assignToJob(pid int, limits model.ResourceLimits) (uintptr, error) {
+	return 0, nil
 }

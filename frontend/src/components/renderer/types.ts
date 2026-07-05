@@ -65,4 +65,28 @@ export interface RuntimeInfo {
   version?: string
   available: boolean
   path?: string
+  error?: string
+  hint?: string
+}
+
+// Matches model.ToolInfo from the backend.
+export interface MarcusToolInfo {
+  id: string
+  name: string
+  display_name: string
+  description?: string
+  icon?: string
+  category: string
+  version?: string
+  source: string
+  contribution: string
+  package_path?: string
+  manifest: string
+  entry_point?: string
+  enabled: boolean
+  healthy?: boolean
+  health_error?: string
+  health_hint?: string
+  last_seen: string
+  created_at: string
 }

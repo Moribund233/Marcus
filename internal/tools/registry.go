@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"Marcus/internal/model"
 
@@ -53,18 +52,6 @@ func (r *Registry) migrate() error {
 		last_seen    DATETIME DEFAULT CURRENT_TIMESTAMP,
 		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
-
-	CREATE TABLE IF NOT EXISTS tool_runtime_log (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		tool_id     TEXT REFERENCES tools(id),
-		pid         INTEGER,
-		status      TEXT,
-		started_at  DATETIME,
-		stopped_at  DATETIME,
-		exit_code   INTEGER,
-		port        INTEGER,
-		error_log   TEXT
-	);
 	`
 	_, err := r.db.Exec(schema)
 	return err
@@ -85,8 +72,8 @@ func rowToTool(row scanner) (model.ToolInfo, error) {
 		return t, err
 	}
 	t.Enabled = enabled != 0
-	t.LastSeen, _ = time.Parse("2006-01-02 15:04:05", lastSeen)
-	t.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+	t.LastSeen = lastSeen
+	t.CreatedAt = createdAt
 	return t, nil
 }
 
@@ -107,7 +94,7 @@ func (r *Registry) ListTools(category string) ([]model.ToolInfo, error) {
 	}
 	defer rows.Close()
 
-    tools := []model.ToolInfo{}
+	tools := []model.ToolInfo{}
 	for rows.Next() {
 		t, err := rowToTool(rows)
 		if err != nil {
@@ -169,47 +156,7 @@ func (r *Registry) DeleteTool(id string) error {
 	return err
 }
 
-func (r *Registry) AddLog(entry model.ProcessState) error {
-	var started, stopped any
-	if entry.StartedAt != nil {
-		started = entry.StartedAt.Format("2006-01-02 15:04:05")
-	}
-	if entry.StoppedAt != nil {
-		stopped = entry.StoppedAt.Format("2006-01-02 15:04:05")
-	}
-	_, err := r.db.Exec(`
-		INSERT INTO tool_runtime_log (tool_id, pid, status, started_at, stopped_at, exit_code, port, error_log)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, entry.ToolID, entry.PID, entry.Status, started, stopped, entry.ExitCode, entry.Port, entry.ErrorLog)
-	return err
-}
-
-func (r *Registry) GetLogs(toolID string, limit int) ([]model.ProcessState, error) {
-	rows, err := r.db.Query(`
-		SELECT tool_id, pid, status, COALESCE(port,0), COALESCE(exit_code,0), COALESCE(error_log,''), started_at, stopped_at
-		FROM tool_runtime_log WHERE tool_id = ? ORDER BY id DESC LIMIT ?
-	`, toolID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	logs := []model.ProcessState{}
-	for rows.Next() {
-		var l model.ProcessState
-		var started, stopped *string
-		if err := rows.Scan(&l.ToolID, &l.PID, &l.Status, &l.Port, &l.ExitCode, &l.ErrorLog, &started, &stopped); err != nil {
-			return nil, err
-		}
-		if started != nil {
-			t, _ := time.Parse("2006-01-02 15:04:05", *started)
-			l.StartedAt = &t
-		}
-		if stopped != nil {
-			t, _ := time.Parse("2006-01-02 15:04:05", *stopped)
-			l.StoppedAt = &t
-		}
-		logs = append(logs, l)
-	}
-	return logs, rows.Err()
+// DB exposes the underlying connection for LogStore which shares the same file.
+func (r *Registry) DB() *sql.DB {
+	return r.db
 }

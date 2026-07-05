@@ -29,3 +29,7 @@ func (a *App) OpenFileDialog(filter string) (string, error) {
 func (a *App) OpenDirectoryDialog() (string, error) {
 	return a.impl.OpenDirectoryDialog()
 }
+
+func (a *App) GetAppLogs(count int) ([]string, error) {
+	return a.impl.GetAppLogs(count)
+}

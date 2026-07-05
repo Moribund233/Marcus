@@ -7,7 +7,7 @@ import { InstallTab } from '@/components/tools/add/InstallTab'
 import { MarketTab } from '@/components/tools/add/MarketTab'
 import { CliTab } from '@/components/tools/add/CliTab'
 
-type AddTab = 'install' | 'market' | 'cli'
+type AddTab = 'market' | 'install' | 'cli'
 
 interface ToolAddProps {
   onAdd: (name: string, command: string, argType: string) => void
@@ -17,11 +17,11 @@ interface ToolAddProps {
 
 export function ToolAdd({ onAdd, onCancel, onRefresh }: ToolAddProps) {
   const { t } = useI18n()
-  const [tab, setTab] = useState<AddTab>('install')
+  const [tab, setTab] = useState<AddTab>('market')
 
   const TABS: { id: AddTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'install', label: t('toolAdd.install.title'), icon: <Package className="h-4 w-4" /> },
     { id: 'market', label: t('toolAdd.market.title'), icon: <Store className="h-4 w-4" /> },
+    { id: 'install', label: t('toolAdd.install.title'), icon: <Package className="h-4 w-4" /> },
     { id: 'cli', label: t('toolAdd.cli.title'), icon: <Terminal className="h-4 w-4" /> },
   ]
 
@@ -55,8 +55,8 @@ export function ToolAdd({ onAdd, onCancel, onRefresh }: ToolAddProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === 'install' && <InstallTab onInstalled={onRefresh} />}
         {tab === 'market' && <MarketTab />}
+        {tab === 'install' && <InstallTab onInstalled={onRefresh} />}
         {tab === 'cli' && <CliTab onAdd={onAdd} onCancel={onCancel} />}
       </div>
     </div>

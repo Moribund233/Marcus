@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -13,30 +14,37 @@ import (
 	"sync"
 	"time"
 
+	"Marcus/internal/executil"
 	"Marcus/internal/model"
 )
 
 type OutputHandler func(toolID string, line string)
 
+type StateChangeHandler func(toolID string, state model.ProcessState)
+
 type Manager struct {
-	mu        sync.Mutex
-	processes map[string]*Process
-	limits    model.ResourceLimits
-	onOutput  OutputHandler
+	mu            sync.Mutex
+	processes     map[string]*Process
+	limits        model.ResourceLimits
+	onOutput      OutputHandler
+	onStateChange StateChangeHandler
 }
 
 type Process struct {
-	Cmd     *exec.Cmd
-	State   model.ProcessState
-	Cancel  context.CancelFunc
-	Stopped chan struct{}
+	Cmd       *exec.Cmd
+	stateMu   sync.Mutex
+	State     model.ProcessState
+	Cancel    context.CancelFunc
+	Stopped   chan struct{}
+	jobHandle uintptr // Windows Job Object handle; closed on stop/shutdown to kill child tree
 }
 
-func NewManager(limits model.ResourceLimits, onOutput OutputHandler) *Manager {
+func NewManager(limits model.ResourceLimits, onOutput OutputHandler, onStateChange StateChangeHandler) *Manager {
 	return &Manager{
-		processes: make(map[string]*Process),
-		limits:    limits,
-		onOutput:  onOutput,
+		processes:     make(map[string]*Process),
+		limits:        limits,
+		onOutput:      onOutput,
+		onStateChange: onStateChange,
 	}
 }
 
@@ -61,25 +69,36 @@ func (m *Manager) Stop(toolID string) error {
 	if !ok {
 		return fmt.Errorf("process not found: %s", toolID)
 	}
+
+	// Closing the Job Object handle triggers JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+	// terminating the whole child process tree on Windows before we wait.
+	closeJobHandle(p.jobHandle)
+	p.jobHandle = 0
+
 	p.Cancel()
 	select {
 	case <-p.Stopped:
 	case <-time.After(5 * time.Second):
-		if p.Cmd.Process != nil {
+		p.stateMu.Lock()
+		if p.Cmd != nil && p.Cmd.Process != nil {
 			p.Cmd.Process.Kill()
 		}
+		p.stateMu.Unlock()
 	}
 	return nil
 }
 
 func (m *Manager) GetState(toolID string) *model.ProcessState {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	p, ok := m.processes[toolID]
+	m.mu.Unlock()
 	if !ok {
 		return &model.ProcessState{ToolID: toolID, Status: model.ProcessIdle}
 	}
-	return &p.State
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	copy := p.State
+	return &copy
 }
 
 func (m *Manager) RunningProcesses() []model.ProcessState {
@@ -87,7 +106,9 @@ func (m *Manager) RunningProcesses() []model.ProcessState {
 	defer m.mu.Unlock()
 	var states []model.ProcessState
 	for _, p := range m.processes {
+		p.stateMu.Lock()
 		states = append(states, p.State)
+		p.stateMu.Unlock()
 	}
 	return states
 }
@@ -96,8 +117,10 @@ func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, p := range m.processes {
+		closeJobHandle(p.jobHandle)
+		p.jobHandle = 0
 		p.Cancel()
-		if p.Cmd.Process != nil {
+		if p.Cmd != nil && p.Cmd.Process != nil {
 			p.Cmd.Process.Kill()
 		}
 		delete(m.processes, id)
@@ -121,9 +144,25 @@ func (m *Manager) cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, p := range m.processes {
-		if p.State.Status == model.ProcessExited || p.State.Status == model.ProcessCrashed {
+		p.stateMu.Lock()
+		done := p.State.Status == model.ProcessExited || p.State.Status == model.ProcessCrashed
+		p.stateMu.Unlock()
+		if done {
 			delete(m.processes, id)
 		}
+	}
+}
+
+// setState safely updates a process's state under its own lock and notifies
+// the manager's state-change callback.
+func (m *Manager) setState(p *Process, updater func(s *model.ProcessState)) {
+	p.stateMu.Lock()
+	updater(&p.State)
+	copy := p.State
+	p.stateMu.Unlock()
+
+	if m.onStateChange != nil {
+		m.onStateChange(copy.ToolID, copy)
 	}
 }
 
@@ -161,19 +200,17 @@ func (m *Manager) startWeb(manifest model.ToolManifest) (*model.ProcessState, er
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutOrDefault(m.limits.TimeoutSeconds))
 	cmd := exec.CommandContext(ctx, webPath)
+	executil.HideWindow(cmd)
 	cmd.Env = append(buildEnv(), fmt.Sprintf("MARCUS_PORT=%d", port))
 
-	state := model.ProcessState{
-		ToolID: manifest.ToolID,
-		Status: model.ProcessLaunching,
-		Port:   port,
-	}
-	now := time.Now()
-	state.StartedAt = &now
-
 	proc := &Process{
-		Cmd:     cmd,
-		State:   state,
+		Cmd: cmd,
+		State: model.ProcessState{
+			ToolID:    manifest.ToolID,
+			Status:    model.ProcessLaunching,
+			Port:      port,
+			StartedAt: time.Now().Format(time.DateTime),
+		},
 		Cancel:  cancel,
 		Stopped: make(chan struct{}),
 	}
@@ -181,20 +218,28 @@ func (m *Manager) startWeb(manifest model.ToolManifest) (*model.ProcessState, er
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start web process: %w", err)
 	}
-	state.PID = cmd.Process.Pid
 
 	m.track(proc)
+	m.setState(proc, func(s *model.ProcessState) {
+		s.PID = cmd.Process.Pid
+	})
+
+	if job, err := assignToJob(cmd.Process.Pid, m.limits); err != nil {
+		log.Printf("sandbox: assignToJob(%d): %v", cmd.Process.Pid, err)
+	} else {
+		proc.jobHandle = job
+	}
 
 	go func() {
 		defer close(proc.Stopped)
+		defer closeJobHandle(proc.jobHandle)
 
-		// health check loop
 		healthURL := fmt.Sprintf("http://127.0.0.1:%d%s", port, manifest.Web.HealthCheck)
 		if manifest.Web.HealthCheck == "" {
 			healthURL = fmt.Sprintf("http://127.0.0.1:%d/", port)
 		}
 
-		maxRetries := 15 // ~15s total
+		maxRetries := 15
 		healthy := false
 		for range maxRetries {
 			resp, err := http.Get(healthURL)
@@ -206,27 +251,29 @@ func (m *Manager) startWeb(manifest model.ToolManifest) (*model.ProcessState, er
 			time.Sleep(1 * time.Second)
 		}
 
-		m.mu.Lock()
-		if healthy {
-			proc.State.Status = model.ProcessRunning
-		} else {
-			proc.State.Status = model.ProcessCrashed
-			proc.State.ErrorLog = "health check timed out"
-		}
-		m.mu.Unlock()
+		m.setState(proc, func(s *model.ProcessState) {
+			if healthy {
+				s.Status = model.ProcessRunning
+			} else {
+				s.Status = model.ProcessCrashed
+				s.ErrorLog = "health check timed out"
+			}
+		})
 
 		cmd.Wait()
-		m.mu.Lock()
-		proc.State.Status = model.ProcessExited
-		if cmd.ProcessState != nil {
-			proc.State.ExitCode = cmd.ProcessState.ExitCode()
-		}
-		now := time.Now()
-		proc.State.StoppedAt = &now
-		m.mu.Unlock()
+		m.setState(proc, func(s *model.ProcessState) {
+			s.Status = model.ProcessExited
+			if cmd.ProcessState != nil {
+				s.ExitCode = cmd.ProcessState.ExitCode()
+			}
+			s.StoppedAt = time.Now().Format(time.DateTime)
+		})
 	}()
 
-	return &proc.State, nil
+	proc.stateMu.Lock()
+	copy := proc.State
+	proc.stateMu.Unlock()
+	return &copy, nil
 }
 
 // ─── terminal / file mode ───────────────────────────────────
@@ -265,18 +312,16 @@ func (m *Manager) startTerminal(manifest model.ToolManifest, args map[string]str
 	timeout := timeoutOrDefault(m.limits.TimeoutSeconds)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := exec.CommandContext(ctx, fullPath, cmdArgs...)
+	executil.HideWindow(cmd)
 	cmd.Env = buildEnv()
 
-	state := model.ProcessState{
-		ToolID: manifest.ToolID,
-		Status: model.ProcessLaunching,
-	}
-	now := time.Now()
-	state.StartedAt = &now
-
 	proc := &Process{
-		Cmd:     cmd,
-		State:   state,
+		Cmd: cmd,
+		State: model.ProcessState{
+			ToolID:    manifest.ToolID,
+			Status:    model.ProcessLaunching,
+			StartedAt: time.Now().Format(time.DateTime),
+		},
 		Cancel:  cancel,
 		Stopped: make(chan struct{}),
 	}
@@ -291,38 +336,45 @@ func (m *Manager) startTerminal(manifest model.ToolManifest, args map[string]str
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start process: %w", err)
-	}
-	state.PID = cmd.Process.Pid
-
-	// assign to job object (windows only)
-	if err := assignToJob(cmd.Process.Pid); err != nil {
-		// non-fatal on Windows
+		return nil, fmt.Errorf("start process: %w\n%s", err, diagnoseStartError(fullPath, err))
 	}
 
 	m.track(proc)
+	m.setState(proc, func(s *model.ProcessState) {
+		s.PID = cmd.Process.Pid
+	})
+
+	if job, err := assignToJob(cmd.Process.Pid, m.limits); err != nil {
+		log.Printf("sandbox: assignToJob(%d): %v", cmd.Process.Pid, err)
+	} else {
+		proc.jobHandle = job
+	}
+
 	go m.streamOutput(proc, stdout, manifest.ToolID)
 	go m.streamOutput(proc, stderr, manifest.ToolID)
 
 	go func() {
 		defer close(proc.Stopped)
+		defer closeJobHandle(proc.jobHandle)
 
 		err := cmd.Wait()
-		m.mu.Lock()
-		proc.State.Status = model.ProcessExited
-		if cmd.ProcessState != nil {
-			proc.State.ExitCode = cmd.ProcessState.ExitCode()
-		}
-		if err != nil && ctx.Err() == context.DeadlineExceeded {
-			proc.State.Status = model.ProcessCrashed
-			proc.State.ErrorLog = "timeout"
-		}
-		now := time.Now()
-		proc.State.StoppedAt = &now
-		m.mu.Unlock()
+		m.setState(proc, func(s *model.ProcessState) {
+			s.Status = model.ProcessExited
+			if cmd.ProcessState != nil {
+				s.ExitCode = cmd.ProcessState.ExitCode()
+			}
+			if err != nil && ctx.Err() == context.DeadlineExceeded {
+				s.Status = model.ProcessCrashed
+				s.ErrorLog = "timeout"
+			}
+			s.StoppedAt = time.Now().Format(time.DateTime)
+		})
 	}()
-
-	return &proc.State, nil
+ 
+	proc.stateMu.Lock()
+	copy := proc.State
+	proc.stateMu.Unlock()
+	return &copy, nil
 }
 
 func (m *Manager) streamOutput(proc *Process, r interface{ Read([]byte) (int, error) }, toolID string) {
@@ -339,6 +391,64 @@ func (m *Manager) streamOutput(proc *Process, r interface{ Read([]byte) (int, er
 			break
 		}
 	}
+}
+
+// diagnoseStartError examines an exec start error and returns a user-friendly
+// diagnostic hint with suggested fix steps.
+func diagnoseStartError(fullPath string, err error) string {
+	errStr := err.Error()
+	home, _ := os.UserHomeDir()
+
+	// bun binary wrapper failure patterns (from marcus-img2ascii.exe etc.).
+	bunErrPatterns := []struct {
+		pattern string
+		hint    string
+	}{
+		{
+			"Bun failed to remap this bin",
+			"bun 生成的二进制包装器无法找到运行环境。\n" +
+				"原因：bun.exe 不在 ~/.bun/bin/ 目录中。\n" +
+				"解决方案：\n" +
+				"  1. 如果 bun 通过 npm 安装，请重新使用官方脚本安装：\n" +
+				"     powershell -c \"irm bun.sh/install.ps1 | iex\"\n" +
+				"  2. 或运行 bun install --force 修复 node_modules",
+		},
+		{
+			"could not find node_modules path",
+			"bun 无法定位 node_modules 路径。\n" +
+				"请运行：bun install --force",
+		},
+		{
+			"bun is not installed in %PATH%",
+			"bun 不在 PATH 环境变量中。\n" +
+				"请将以下目录添加到 PATH：\n" +
+				"  " + filepath.Join(home, ".bun", "bin") + "\n" +
+				"或重新安装 bun：\n" +
+				"  powershell -c \"irm bun.sh/install.ps1 | iex\"",
+		},
+	}
+
+	// Check for bun wrapper errors embedded in the executable output.
+	if strings.Contains(errStr, "cannot run executable") ||
+		strings.Contains(errStr, "is not recognized") ||
+		strings.Contains(errStr, "could not create process") {
+		return "\n⚠️ 提示：可执行文件无法运行。"
+	}
+
+	for _, bp := range bunErrPatterns {
+		if strings.Contains(errStr, bp.pattern) {
+			return "\n⚠️ " + bp.hint
+		}
+	}
+
+	// Generic diagnostics based on file type.
+	if strings.HasSuffix(strings.ToLower(fullPath), ".exe") {
+		if _, statErr := os.Stat(fullPath); statErr != nil {
+			return "\n⚠️ 文件不存在或无法访问：" + fullPath
+		}
+	}
+
+	return ""
 }
 
 func timeoutOrDefault(t int) time.Duration {
@@ -384,7 +494,23 @@ func resolvePath(name string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("find %s: not found in PATH or runtime directories", name)
+	// Provide diagnostic hints for common bun tool scenarios.
+	bunHint := ""
+	bunExe := filepath.Join(home, ".bun", "bin", "bun.exe")
+	if _, err := os.Stat(bunExe); os.IsNotExist(err) {
+		bunHint = "\n⚠️ bun.exe 不在 ~/.bun/bin/ 中（bun 可能通过 npm 安装）。\n" +
+			"bun 二进制包装器需要 bun.exe 在同一目录才能运行。\n" +
+			"解决方案：使用官方安装脚本重新安装 bun：\n" +
+			"  powershell -c \"irm bun.sh/install.ps1 | iex\""
+	} else {
+		// bun.exe exists but the tool shim doesn't — suggest reinstall.
+		toolShim := filepath.Join(home, ".bun", "bin", name+".exe")
+		if _, err := os.Stat(toolShim); os.IsNotExist(err) {
+			bunHint = "\n⚠️ 未找到工具包装器 " + name + ".exe。\n" +
+				"请尝试重新安装此工具：bun install -g " + name
+		}
+	}
+	return "", fmt.Errorf("find %s: not found in PATH or runtime directories%s", name, bunHint)
 }
 
 // buildEnv returns the full environment for subprocesses, with common runtime
@@ -422,7 +548,6 @@ func buildEnv() []string {
 	currentPath := os.Getenv("PATH")
 	newPath := strings.Join(append(existing, currentPath), string(filepath.ListSeparator))
 
-	// find PATH entry (case-insensitive on Windows) and replace it
 	for i, e := range env {
 		key, _, ok := strings.Cut(e, "=")
 		if ok && strings.EqualFold(key, "PATH") {
@@ -430,8 +555,5 @@ func buildEnv() []string {
 			return env
 		}
 	}
-	// no PATH found, append it
 	return append(env, "PATH="+newPath)
 }
-
-

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { TitleBar } from '@/components/title-bar'
 import { StatusBar } from '@/components/status-bar'
 import { Sidebar } from '@/components/sidebar'
@@ -14,6 +15,7 @@ import { usePinnedTools } from '@/hooks/usePinnedTools'
 import { useShortcuts } from '@/hooks/useShortcuts'
 import { useI18n } from '@/hooks/useI18n'
 import { GetTools, GetConfig } from '../wailsjs/go/main/App'
+import { EventsOn } from '../wailsjs/runtime'
 import { model } from '../wailsjs/go/models'
 
 type View = 'grid' | 'detail' | 'manual' | 'settings'
@@ -30,8 +32,8 @@ function App() {
   const [statusMessage, setStatusMessage] = useState(t('statusBar.ready'))
   const [showToolPicker, setShowToolPicker] = useState(false)
   const [allTools, setAllTools] = useState<model.ToolInfo[]>([])
-  const { tools, loading, refresh, launch, stop, pollState, addManual } = useTools(category)
-  const { status: runtimeStatus, refresh: refreshRuntime } = useRuntime()
+  const { tools, loading, refresh, launch, stop, addManual } = useTools(category)
+  const { status: runtimeStatus, loading: runtimeLoading, refresh: refreshRuntime } = useRuntime()
   const { pinnedIds, togglePin, isPinned } = usePinnedTools()
 
   // load theme & language on startup
@@ -41,15 +43,26 @@ function App() {
         document.documentElement.classList.toggle('dark', cfg.theme !== 'light')
         if (cfg.language) setLocale(cfg.language)
       }
-    }).catch(() => {})
+    }).catch((err) => console.error('GetConfig failed', err))
   }, [setLocale])
 
   const toolCache = useRef<Record<string, model.ToolInfo>>({})
+  const MAX_CACHE = 200
 
-  // keep tool cache in sync
+  // keep tool cache in sync, evict stale entries beyond MAX_CACHE
   useEffect(() => {
+    const currentIds = new Set(tools.map((t) => t.id))
     for (const tool of tools) {
       toolCache.current[tool.id] = tool
+    }
+    // evict entries that are no longer in the current tool set
+    const ids = Object.keys(toolCache.current)
+    if (ids.length > MAX_CACHE) {
+      for (const id of ids) {
+        if (!currentIds.has(id)) {
+          delete toolCache.current[id]
+        }
+      }
     }
   }, [tools])
 
@@ -100,8 +113,8 @@ function App() {
     try {
       const all = await GetTools('all')
       setAllTools(all ?? [])
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('GetTools(all) failed', err)
     }
     setShowToolPicker(true)
   }, [])
@@ -125,24 +138,22 @@ function App() {
     showStatus(t('statusBar.ready'))
   }, [showStatus])
 
-  // global polling: detect exited processes even when ToolDetail is not mounted
+  // listen for state-change events pushed from backend (replaces polling).
   useEffect(() => {
-    if (runningTools.length === 0) return
-    const id = setInterval(async () => {
-      const currentIds = [...runningTools]
-      for (const tool of currentIds) {
-        try {
-          const state = await pollState(tool.id)
-          if (state?.status === 'exited' || state?.status === 'crashed') {
-            handleToolStop(tool.id)
-          }
-        } catch {
-          // ignore
+    const unsub = EventsOn('tool:state-changed', (data: { tool_id: string; status: string }) => {
+      if (data.status === 'launching' || data.status === 'running') {
+        const cached = toolCache.current[data.tool_id]
+        if (cached) {
+          setRunningTools((prev) =>
+            prev.find((x) => x.id === data.tool_id) ? prev : [...prev, cached],
+          )
         }
+      } else if (data.status === 'exited' || data.status === 'crashed') {
+        setRunningTools((prev) => prev.filter((x) => x.id !== data.tool_id))
       }
-    }, 2000)
-    return () => clearInterval(id)
-  }, [runningTools, pollState, handleToolStop])
+    })
+    return () => unsub()
+  }, [])
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -165,42 +176,43 @@ function App() {
           expanded={sidebarExpanded}
         />
 
-        {view === 'grid' && (
-          <ToolGrid
-            category={category}
-            tools={tools}
-            loading={loading}
-            onSelectTool={handleSelectTool}
-            onTogglePin={togglePin}
-            isPinned={isPinned}
-          />
-        )}
+        <ErrorBoundary>
+          {view === 'grid' && (
+            <ToolGrid
+              category={category}
+              tools={tools}
+              loading={loading}
+              onSelectTool={handleSelectTool}
+              onTogglePin={togglePin}
+              isPinned={isPinned}
+            />
+          )}
 
-        {view === 'detail' && selectedTool && (
-          <ToolDetail
-            key={selectedTool.id}
-            tool={selectedTool}
-            onBack={handleBack}
-            onLaunch={launch}
-            onStop={stop}
-            onToolLaunch={handleToolLaunch}
-            onToolStop={handleToolStop}
-            pollState={pollState}
-          />
-        )}
+          {view === 'detail' && selectedTool && (
+            <ToolDetail
+              key={selectedTool.id}
+              tool={selectedTool}
+              onBack={handleBack}
+              onLaunch={launch}
+              onStop={stop}
+              onToolLaunch={handleToolLaunch}
+              onToolStop={handleToolStop}
+            />
+          )}
 
-        {view === 'manual' && (
-          <ToolAdd onAdd={handleAddTool} onCancel={handleBack} onRefresh={handleRefresh} />
-        )}
+          {view === 'manual' && (
+            <ToolAdd onAdd={handleAddTool} onCancel={handleBack} onRefresh={handleRefresh} />
+          )}
 
-        {view === 'settings' && (
-          <Settings
-            runtimeStatus={runtimeStatus}
-            runtimeLoading={loading}
-            onRefreshRuntime={refreshRuntime}
-            onClose={handleBack}
-          />
-        )}
+          {view === 'settings' && (
+            <Settings
+              runtimeStatus={runtimeStatus}
+              runtimeLoading={loading}
+              onRefreshRuntime={refreshRuntime}
+              onClose={handleBack}
+            />
+          )}
+        </ErrorBoundary>
 
         {rightSidebarVisible && (
           <RightSidebar
@@ -221,7 +233,7 @@ function App() {
           onTogglePin={togglePin}
         />
       </div>
-      {statusBarVisible && <StatusBar message={statusMessage} runtimeStatus={runtimeStatus} />}
+      {statusBarVisible && <StatusBar runtimeStatus={runtimeStatus} runtimeLoading={runtimeLoading} />}
     </div>
   )
 }

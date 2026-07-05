@@ -1,8 +1,15 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { FileUp, Package, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
-import { OpenFileDialog, InstallToolPackage } from '../../../../wailsjs/go/main/App'
+import { OpenFileDialog, InstallToolPackageAsync } from '../../../../wailsjs/go/main/App'
+import { EventsOn } from '../../../../wailsjs/runtime'
 import { Button } from '@/components/ui/button'
 import { useI18n } from '@/hooks/useI18n'
+
+interface InstallProgress {
+  status: 'idle' | 'starting' | 'running' | 'warning' | 'error'
+  message: string
+  progress: number
+}
 
 interface InstallTabProps {
   onInstalled: () => void
@@ -15,6 +22,37 @@ export function InstallTab({ onInstalled }: InstallTabProps) {
   const [installing, setInstalling] = useState(false)
   const [result, setResult] = useState<'success' | 'error' | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
+  const [progress, setProgress] = useState<InstallProgress>({ status: 'idle', message: '', progress: 0 })
+  const currentPathRef = useRef('')
+
+  useEffect(() => {
+    const unsubProgress = EventsOn('install:progress', (data: { path: string; status: string; message: string; progress: number }) => {
+      if (data.path !== currentPathRef.current) return
+      setProgress({
+        status: data.status as InstallProgress['status'],
+        message: data.message,
+        progress: data.progress,
+      })
+    })
+    const unsubComplete = EventsOn('install:complete', (data: { path: string; success: boolean; error: string }) => {
+      if (data.path !== currentPathRef.current) return
+      setInstalling(false)
+      if (data.success) {
+        setResult('success')
+        setFilePath('')
+        setProgress({ status: 'idle', message: '', progress: 0 })
+        onInstalled()
+      } else {
+        setResult('error')
+        setErrorMsg(data.error)
+        setProgress({ status: 'error', message: data.error, progress: 0 })
+      }
+    })
+    return () => {
+      unsubProgress()
+      unsubComplete()
+    }
+  }, [onInstalled])
 
   const handleSelect = useCallback(async () => {
     const path = await OpenFileDialog('*.whl;*.tgz;*.tar.gz')
@@ -22,6 +60,7 @@ export function InstallTab({ onInstalled }: InstallTabProps) {
       setFilePath(path)
       setResult(null)
       setErrorMsg('')
+      setProgress({ status: 'idle', message: '', progress: 0 })
     }
   }, [])
 
@@ -33,6 +72,7 @@ export function InstallTab({ onInstalled }: InstallTabProps) {
       setFilePath((file as any).path)
       setResult(null)
       setErrorMsg('')
+      setProgress({ status: 'idle', message: '', progress: 0 })
     }
   }, [])
 
@@ -47,21 +87,20 @@ export function InstallTab({ onInstalled }: InstallTabProps) {
 
   const handleInstall = useCallback(async () => {
     if (!filePath) return
+    currentPathRef.current = filePath
     setInstalling(true)
     setResult(null)
     setErrorMsg('')
+    setProgress({ status: 'starting', message: t('toolAdd.install.preparing'), progress: 0 })
     try {
-      await InstallToolPackage(filePath)
-      setResult('success')
-      setFilePath('')
-      onInstalled()
+      await InstallToolPackageAsync(filePath)
     } catch (e) {
+      setInstalling(false)
       setResult('error')
       setErrorMsg(String(e))
-    } finally {
-      setInstalling(false)
+      setProgress({ status: 'error', message: String(e), progress: 0 })
     }
-  }, [filePath, onInstalled])
+  }, [filePath, t])
 
   const fileName = filePath ? filePath.split(/[\\/]/).pop() : ''
 
@@ -111,6 +150,21 @@ export function InstallTab({ onInstalled }: InstallTabProps) {
               </Button>
             </div>
           </>
+        )}
+
+        {installing && progress.status !== 'idle' && (
+          <div className="mt-6 w-full max-w-xs">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{progress.message}</span>
+              <span>{Math.round(progress.progress)}%</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+                style={{ width: `${Math.min(progress.progress, 100)}%` }}
+              />
+            </div>
+          </div>
         )}
 
         {result === 'success' && (
