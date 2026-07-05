@@ -41,6 +41,8 @@ func (a *App) InstallToolPackageAsync(path string) error {
 }
 
 func (a *App) runPackageInstall(path string) {
+	lang := a.cfg.Language
+
 	emit := func(status, message string, progress int) {
 		wailsRuntime.EventsEmit(a.ctx, "install:progress", map[string]any{
 			"path":     path,
@@ -57,7 +59,7 @@ func (a *App) runPackageInstall(path string) {
 		})
 	}
 
-	emit("starting", "准备安装...", 0)
+	emit("starting", model.Localize(lang, "install.preparing"), 0)
 
 	cmd, _, err := a.buildPackageInstallCmd(path)
 	if err != nil {
@@ -67,7 +69,7 @@ func (a *App) runPackageInstall(path string) {
 	}
 	executil.HideWindow(cmd)
 
-	emit("running", "正在执行安装命令...", 30)
+	emit("running", model.Localize(lang, "install.running"), 30)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -80,7 +82,7 @@ func (a *App) runPackageInstall(path string) {
 		return
 	}
 
-	emit("running", "安装完成，正在注册工具...", 80)
+	emit("running", model.Localize(lang, "install.registering"), 80)
 
 	newTools, err := a.registerLocalPackage(path)
 	if err != nil {
@@ -89,7 +91,7 @@ func (a *App) runPackageInstall(path string) {
 		return
 	}
 
-	emit("running", fmt.Sprintf("已注册 %d 个新工具", len(newTools)), 100)
+	emit("running", fmt.Sprintf(model.Localize(lang, "install.registered"), len(newTools)), 100)
 	emitComplete(true, "")
 }
 
@@ -99,22 +101,23 @@ func (a *App) runPackageInstall(path string) {
 func (a *App) buildPackageInstallCmd(path string) (*exec.Cmd, string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	base := strings.ToLower(filepath.Base(path))
+	lang := a.cfg.Language
 
 	switch {
 	case ext == ".whl":
 		if _, err := exec.LookPath("uv"); err != nil {
-			return nil, "", fmt.Errorf("uv 未安装，无法安装 Python 包。\n请先安装 uv：\n  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"")
+			return nil, "", fmt.Errorf("%s", model.Localize(lang, "install.uv.notFound"))
 		}
 		return exec.Command("uv", "tool", "install", path), "whl", nil
 
 	case ext == ".tgz" || strings.HasSuffix(base, ".tar.gz"):
 		if _, err := exec.LookPath("bun"); err != nil {
-			return nil, "", fmt.Errorf("bun 未安装，无法安装 Node.js 包。\n请先安装 bun：\n  powershell -c \"irm bun.sh/install.ps1 | iex\"")
+			return nil, "", fmt.Errorf("%s", model.Localize(lang, "install.bun.notFound"))
 		}
 		return exec.Command("bun", "install", "-g", path), "tgz", nil
 
 	default:
-		return nil, "", fmt.Errorf("unsupported package type: %s (supported: .whl, .tgz)", ext)
+		return nil, "", fmt.Errorf("%s", fmt.Sprintf(model.Localize(lang, "install.unsupportedType"), ext))
 	}
 }
 
@@ -122,6 +125,8 @@ func (a *App) buildPackageInstallCmd(path string) (*exec.Cmd, string, error) {
 // any newly discovered tools, and returns them. If no new tool is found it
 // returns an error so the caller can surface a clear failure message.
 func (a *App) registerLocalPackage(path string) ([]model.ToolInfo, error) {
+	lang := a.cfg.Language
+
 	if a.scanner == nil {
 		return nil, fmt.Errorf("scanner not initialized")
 	}
@@ -151,7 +156,7 @@ func (a *App) registerLocalPackage(path string) ([]model.ToolInfo, error) {
 	}
 
 	if len(newTools) == 0 {
-		return nil, fmt.Errorf("安装成功，但未找到可注册的 Marcus 工具。请确认包包含 marcus entry point 或 marcus 配置")
+		return nil, fmt.Errorf("%s", model.Localize(lang, "install.noToolsFound"))
 	}
 
 	if a.storeInstaller != nil {

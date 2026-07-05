@@ -134,13 +134,21 @@ func (c *Client) saveToCache(idx *model.StoreIndex) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM store_cache"); err != nil {
-		return err
-	}
+	// Collect incoming plugin IDs for cleanup of removed plugins.
+	incomingIDs := make(map[string]struct{}, len(idx.Plugins))
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO store_cache (id, display_name, description, categories, latest_version, versions, deprecated, deprecation_msg, synced_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+			display_name=excluded.display_name,
+			description=excluded.description,
+			categories=excluded.categories,
+			latest_version=excluded.latest_version,
+			versions=excluded.versions,
+			deprecated=excluded.deprecated,
+			deprecation_msg=excluded.deprecation_msg,
+			synced_at=CURRENT_TIMESTAMP
 	`)
 	if err != nil {
 		return err
@@ -148,6 +156,8 @@ func (c *Client) saveToCache(idx *model.StoreIndex) error {
 	defer stmt.Close()
 
 	for id, plugin := range idx.Plugins {
+		incomingIDs[id] = struct{}{}
+
 		versionsJSON, _ := json.Marshal(plugin.Versions)
 
 		latestVer, ok := plugin.Versions[plugin.LatestVersion]
@@ -174,7 +184,38 @@ func (c *Client) saveToCache(idx *model.StoreIndex) error {
 			plugin.LatestVersion, string(versionsJSON),
 			deprecated, plugin.DeprecationMsg,
 		); err != nil {
-			return fmt.Errorf("insert cache %s: %w", id, err)
+			return fmt.Errorf("upsert cache %s: %w", id, err)
+		}
+	}
+
+	// Remove plugins that no longer exist in the remote index.
+	if len(incomingIDs) > 0 {
+		rows, err := tx.Query("SELECT id FROM store_cache")
+		if err != nil {
+			return err
+		}
+		var toDelete []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			if _, ok := incomingIDs[id]; !ok {
+				toDelete = append(toDelete, id)
+			}
+		}
+		rows.Close()
+
+		delStmt, err := tx.Prepare("DELETE FROM store_cache WHERE id = ?")
+		if err != nil {
+			return err
+		}
+		defer delStmt.Close()
+		for _, id := range toDelete {
+			if _, err := delStmt.Exec(id); err != nil {
+				return fmt.Errorf("delete stale cache %s: %w", id, err)
+			}
 		}
 	}
 

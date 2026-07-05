@@ -14,30 +14,39 @@ import { useRuntime } from '@/hooks/useRuntime'
 import { usePinnedTools } from '@/hooks/usePinnedTools'
 import { useShortcuts } from '@/hooks/useShortcuts'
 import { useI18n } from '@/hooks/useI18n'
+import { useAppState } from '@/hooks/useAppState'
 import { GetConfig } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime'
-import { model } from '../wailsjs/go/models'
-
-type View = 'grid' | 'detail' | 'manual' | 'settings'
 
 function App() {
-  const [category, setCategory] = useState('all')
-  const [view, setView] = useState<View>('grid')
-  const [selectedTool, setSelectedTool] = useState<model.ToolInfo | null>(null)
-  const [runningTools, setRunningTools] = useState<model.ToolInfo[]>([])
-  const [sidebarExpanded, setSidebarExpanded] = useState(true)
-  const [rightSidebarVisible, setRightSidebarVisible] = useState(true)
-  const [statusBarVisible, setStatusBarVisible] = useState(true)
+  const {
+    category, setCategory,
+    view, setView,
+    selectedTool,
+    runningTools, setRunningTools,
+    sidebarExpanded,
+    rightSidebarVisible,
+    statusBarVisible,
+    showToolPicker, setShowToolPicker,
+    allTools, setAllTools,
+    handleSelectTool,
+    handleBack,
+    handleGoBack,
+    handleToolLaunch,
+    handleToolStop,
+    handleToggleSidebar,
+    handleToggleRightSidebar,
+    handleToggleStatusBar,
+  } = useAppState()
+
   const { t, setLocale } = useI18n()
   const [statusMessage, setStatusMessage] = useState(t('statusBar.ready'))
-  const [showToolPicker, setShowToolPicker] = useState(false)
-  const [allTools, setAllTools] = useState<model.ToolInfo[]>([])
+  const { pinnedIds, togglePin, isPinned } = usePinnedTools()
   const {
     tools, loading, refresh, launch, stop, addManual, uninstall,
     fetchAllTools, getToolById,
   } = useTools(category)
   const { status: runtimeStatus, loading: runtimeLoading, refresh: refreshRuntime } = useRuntime()
-  const { pinnedIds, togglePin, isPinned } = usePinnedTools()
 
   // load theme & language on startup
   useEffect(() => {
@@ -63,47 +72,23 @@ function App() {
     return () => clearTimeout(timer)
   }, [t])
 
-  const handleSelectTool = useCallback((tool: model.ToolInfo) => {
-    setSelectedTool(tool)
-    setView('detail')
-  }, [])
-
-  const handleBack = useCallback(() => {
-    setView('grid')
-    setSelectedTool(null)
-  }, [])
-
-  const handleAddTool = useCallback((name: string, command: string, argType: string) => {
-    addManual(name, command, argType)
-    showStatus(t('statusBar.toolAdded', { name }))
-    setView('grid')
-  }, [addManual, showStatus])
-
   const handleRefresh = useCallback(() => {
     showStatus(t('statusBar.scanning'))
     refresh()
   }, [refresh, showStatus])
 
-  const handleToolLaunch = useCallback((tool: model.ToolInfo) => {
-    setRunningTools((prev) => {
-      if (prev.find((x) => x.id === tool.id)) return prev
-      return [...prev, tool]
-    })
-    showStatus(t('statusBar.launching', { name: tool.display_name }))
-  }, [showStatus])
+  const handleAddToolSubmit = useCallback((name: string, command: string, argType: string) => {
+    addManual(name, command, argType)
+    showStatus(t('statusBar.toolAdded', { name }))
+    setView('grid')
+  }, [addManual, showStatus, setView])
 
   const handleShowToolPicker = useCallback(async () => {
     setAllTools([])
     const list = await fetchAllTools()
     setAllTools(list)
     setShowToolPicker(true)
-  }, [fetchAllTools])
-
-  const handleGoBack = useCallback(() => {
-    if (view !== 'grid') {
-      handleBack()
-    }
-  }, [view, handleBack])
+  }, [fetchAllTools, setAllTools, setShowToolPicker])
 
   useShortcuts({
     onCommandPalette: handleShowToolPicker,
@@ -112,11 +97,6 @@ function App() {
     onSettings: () => setView('settings'),
     onBack: handleGoBack,
   })
-
-  const handleToolStop = useCallback((toolId: string) => {
-    setRunningTools((prev) => prev.filter((x) => x.id !== toolId))
-    showStatus(t('statusBar.ready'))
-  }, [showStatus])
 
   // listen for state-change events pushed from backend
   useEffect(() => {
@@ -133,7 +113,7 @@ function App() {
       }
     })
     return () => unsub()
-  }, [getToolById])
+  }, [getToolById, setRunningTools])
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -142,9 +122,9 @@ function App() {
         sidebarExpanded={sidebarExpanded}
         rightSidebarVisible={rightSidebarVisible}
         statusBarVisible={statusBarVisible}
-        onToggleSidebar={() => setSidebarExpanded((v) => !v)}
-        onToggleRightSidebar={() => setRightSidebarVisible((v) => !v)}
-        onToggleStatusBar={() => setStatusBarVisible((v) => !v)}
+        onToggleSidebar={handleToggleSidebar}
+        onToggleRightSidebar={handleToggleRightSidebar}
+        onToggleStatusBar={handleToggleStatusBar}
       />
       <div className="relative z-10 flex flex-1 overflow-hidden">
         <Sidebar
@@ -182,7 +162,7 @@ function App() {
           )}
 
           {view === 'manual' && (
-            <ToolAdd onAdd={handleAddTool} onCancel={handleBack} onRefresh={handleRefresh} />
+            <ToolAdd onAdd={handleAddToolSubmit} onCancel={handleBack} onRefresh={handleRefresh} />
           )}
 
           {view === 'settings' && (

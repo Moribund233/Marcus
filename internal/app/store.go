@@ -30,6 +30,8 @@ func (a *App) StoreSearchPlugins(query string) ([]model.StorePlugin, error) {
 }
 
 func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, error) {
+	lang := a.cfg.Language
+
 	if a.storeInstaller == nil {
 		return nil, fmt.Errorf("store not initialized")
 	}
@@ -61,7 +63,7 @@ func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, erro
 				_ = a.storeClient.RecordPendingInstall(pluginID, version)
 			}
 			result.Success = false
-			result.Error = fmt.Sprintf("安装包已下载，但扫描工具时失败：%v", scanErr)
+			result.Error = model.Localize(lang, "install.noToolsFound")
 			return result, nil
 		}
 	}
@@ -83,7 +85,7 @@ func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, erro
 			_ = a.storeClient.RecordPendingInstall(pluginID, version)
 		}
 		result.Success = false
-		result.Error = "安装包已下载，但未找到可注册的 Marcus 工具。请检查插件包是否包含正确的 marcus entry point。"
+		result.Error = model.Localize(lang, "install.noToolsFound")
 		return result, nil
 	}
 

@@ -22,13 +22,14 @@ func (a *App) GetRuntimeStatus() map[string]model.RuntimeInfo {
 // InstallRuntime installs a runtime (uv or bun) synchronously using the
 // language-native package manager (pip for uv, npm for bun).
 func (a *App) InstallRuntime(runtimeName string) error {
+	lang := a.cfg.Language
 	switch runtimeName {
 	case "uv":
 		if _, err := exec.LookPath("uv"); err == nil {
 			return nil
 		}
 		if _, err := exec.LookPath("pip"); err != nil {
-			return fmt.Errorf("pip 未安装，无法安装 uv。请先安装 Python pip")
+			return fmt.Errorf("%s", model.Localize(lang, "runtime.uv.pipNotFound"))
 		}
 		cmd := exec.Command("pip", "install", "uv")
 		executil.HideWindow(cmd)
@@ -41,7 +42,7 @@ func (a *App) InstallRuntime(runtimeName string) error {
 			return nil
 		}
 		if _, err := exec.LookPath("npm"); err != nil {
-			return fmt.Errorf("npm 未安装，无法安装 bun。请先安装 Node.js npm")
+			return fmt.Errorf("%s", model.Localize(lang, "runtime.bun.npmNotFound"))
 		}
 		cmd := exec.Command("npm", "install", "-g", "bun")
 		executil.HideWindow(cmd)
@@ -50,7 +51,7 @@ func (a *App) InstallRuntime(runtimeName string) error {
 		return cmd.Run()
 
 	default:
-		return fmt.Errorf("unknown runtime: %s (supported: uv, bun)", runtimeName)
+		return fmt.Errorf("%s", fmt.Sprintf(model.Localize(lang, "runtime.unknown"), runtimeName))
 	}
 }
 
@@ -65,6 +66,8 @@ func (a *App) InstallRuntimeAsync(runtimeName string) error {
 }
 
 func (a *App) runRuntimeInstall(runtimeName string) {
+	lang := a.cfg.Language
+
 	emit := func(status, message string, progress int) {
 		wailsRuntime.EventsEmit(a.ctx, "runtime:install-progress", map[string]any{
 			"runtime":  runtimeName,
@@ -84,30 +87,31 @@ func (a *App) runRuntimeInstall(runtimeName string) {
 	switch runtimeName {
 	case "uv":
 		if _, err := exec.LookPath("uv"); err == nil {
-			emit("done", "uv 已安装", 100)
+			emit("done", model.Localize(lang, "runtime.uv.alreadyInstalled"), 100)
 			emitComplete(true, "")
 			return
 		}
 	case "bun":
 		if _, err := exec.LookPath("bun"); err == nil {
-			emit("done", "bun 已安装", 100)
+			emit("done", model.Localize(lang, "runtime.bun.alreadyInstalled"), 100)
 			emitComplete(true, "")
 			return
 		}
 	default:
-		emit("error", fmt.Sprintf("不支持运行时: %s", runtimeName), 0)
-		emitComplete(false, fmt.Sprintf("unknown runtime: %s", runtimeName))
+		msg := fmt.Sprintf(model.Localize(lang, "runtime.unknown"), runtimeName)
+		emit("error", msg, 0)
+		emitComplete(false, msg)
 		return
 	}
 
-	emit("starting", "正在准备安装...", 0)
+	emit("starting", model.Localize(lang, "install.preparing"), 0)
 
 	var cmd *exec.Cmd
 	var label string
 	switch runtimeName {
 	case "uv":
 		if _, err := exec.LookPath("pip"); err != nil {
-			msg := "pip 未安装，无法安装 uv。请先安装 Python pip"
+			msg := model.Localize(lang, "runtime.uv.pipNotFound")
 			emit("error", msg, 0)
 			emitComplete(false, msg)
 			return
@@ -116,7 +120,7 @@ func (a *App) runRuntimeInstall(runtimeName string) {
 		label = "uv"
 	case "bun":
 		if _, err := exec.LookPath("npm"); err != nil {
-			msg := "npm 未安装，无法安装 bun。请先安装 Node.js npm"
+			msg := model.Localize(lang, "runtime.bun.npmNotFound")
 			emit("error", msg, 0)
 			emitComplete(false, msg)
 			return
@@ -126,8 +130,7 @@ func (a *App) runRuntimeInstall(runtimeName string) {
 	}
 	executil.HideWindow(cmd)
 
-	emit("running", fmt.Sprintf("正在通过 %s 安装 %s...",
-		map[string]string{"uv": "pip", "bun": "npm"}[runtimeName], label), 30)
+	emit("running", fmt.Sprintf(model.Localize(lang, "runtime.%s.installing"), label), 30)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -140,6 +143,6 @@ func (a *App) runRuntimeInstall(runtimeName string) {
 		return
 	}
 
-	emit("done", fmt.Sprintf("%s 安装成功", label), 100)
+	emit("done", fmt.Sprintf(model.Localize(lang, "runtime.%s.installSuccess"), label), 100)
 	emitComplete(true, "")
 }

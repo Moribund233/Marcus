@@ -245,8 +245,9 @@ func (m *Manager) startWeb(manifest model.ToolManifest) (*model.ProcessState, er
 			healthURL = fmt.Sprintf("http://127.0.0.1:%d/", port)
 		}
 
-		maxRetries := 15
+		maxRetries := 10
 		healthy := false
+		delay := 500 * time.Millisecond
 		for range maxRetries {
 			resp, err := http.Get(healthURL)
 			if err == nil {
@@ -254,7 +255,8 @@ func (m *Manager) startWeb(manifest model.ToolManifest) (*model.ProcessState, er
 				healthy = true
 				break
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(delay)
+			delay = min(delay*2, 5*time.Second)
 		}
 
 		m.setState(proc, func(s *model.ProcessState) {
