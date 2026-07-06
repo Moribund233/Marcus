@@ -1,11 +1,14 @@
 import { useState, useCallback } from 'react'
 import { model } from '../../wailsjs/go/models'
 
-export type View = 'grid' | 'detail' | 'manual' | 'settings'
+export type View = 'welcome' | 'grid' | 'detail' | 'manual' | 'settings' | 'chat'
 
+/**
+ * 应用级状态钩子，管理视图、选中工具、运行中工具以及侧边栏布局状态。
+ */
 export function useAppState() {
   const [category, setCategory] = useState('all')
-  const [view, setView] = useState<View>('grid')
+  const [view, setView] = useState<View>('welcome')
   const [selectedTool, setSelectedTool] = useState<model.ToolInfo | null>(null)
   const [runningTools, setRunningTools] = useState<model.ToolInfo[]>([])
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
@@ -20,7 +23,7 @@ export function useAppState() {
   }, [])
 
   const handleBack = useCallback(() => {
-    setView('grid')
+    setView('welcome')
     setSelectedTool(null)
   }, [])
 
@@ -57,6 +60,10 @@ export function useAppState() {
     setStatusBarVisible((v) => !v)
   }, [])
 
+  const handleEnterChat = useCallback(() => {
+    setView('chat')
+  }, [])
+
   return {
     category,
     setCategory,
@@ -82,5 +89,6 @@ export function useAppState() {
     handleToggleSidebar,
     handleToggleRightSidebar,
     handleToggleStatusBar,
+    handleEnterChat,
   }
 }

@@ -7,6 +7,8 @@ import type { RuntimeInfo } from '@/components/renderer/types'
 interface StatusBarProps {
   runtimeStatus: Record<string, RuntimeInfo>
   runtimeLoading: boolean
+  llmProvider?: string
+  llmModel?: string
 }
 
 const RUNTIME_ORDER = ['python', 'node', 'uv', 'bun']
@@ -30,7 +32,7 @@ function RuntimeIcon({ info }: { info: RuntimeInfo }) {
   return <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
 }
 
-export function StatusBar({ runtimeStatus, runtimeLoading }: StatusBarProps) {
+export function StatusBar({ runtimeStatus, runtimeLoading, llmProvider, llmModel }: StatusBarProps) {
   const { t } = useI18n()
   const [phase, setPhase] = useState<'checking' | 'ready'>('checking')
   const [hintKey, setHintKey] = useState<string | null>(null)
@@ -68,7 +70,7 @@ export function StatusBar({ runtimeStatus, runtimeLoading }: StatusBarProps) {
   )
 
   return (
-    <div className="flex h-6 shrink-0 items-center border-t border-border bg-card px-3 text-[11px] text-muted-foreground/70 select-none overflow-hidden">
+    <div className="flex h-6 shrink-0 items-center justify-between border-t border-border bg-card px-3 text-[11px] text-muted-foreground/70 select-none overflow-hidden">
       <div className="overflow-hidden relative" style={{ height: ROW_H }}>
         <div
           className="flex flex-col transition-transform duration-500"
@@ -120,6 +122,25 @@ export function StatusBar({ runtimeStatus, runtimeLoading }: StatusBarProps) {
             </span>
           </div>
         </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5 pl-3 border-l border-border/50">
+        {llmProvider ? (
+          <>
+            <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+            <span className="truncate max-w-[120px]">{llmProvider}</span>
+            {llmModel && (
+              <>
+                <span className="text-muted-foreground/30">/</span>
+                <span className="truncate max-w-[160px] text-muted-foreground/60">{llmModel}</span>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
+            <span className="text-muted-foreground/50">{t('statusBar.llmNotConfigured')}</span>
+          </>
+        )}
       </div>
     </div>
   )

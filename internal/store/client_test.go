@@ -23,13 +23,31 @@ func newTestClient(t *testing.T, indexURL string) *Client {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	c, err := NewClient(db, indexURL)
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+	if _, err := db.Exec(storeSchema); err != nil {
+		t.Fatalf("create store tables: %v", err)
 	}
+
+	c := NewClient(db, indexURL)
 	t.Cleanup(func() { c.Close() })
 	return c
 }
+
+const storeSchema = `
+CREATE TABLE IF NOT EXISTS store_cache (
+	id TEXT PRIMARY KEY, display_name TEXT NOT NULL, description TEXT DEFAULT '',
+	categories TEXT DEFAULT '[]', latest_version TEXT NOT NULL, versions TEXT NOT NULL,
+	deprecated INTEGER DEFAULT 0, deprecation_msg TEXT DEFAULT '',
+	synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS store_installed (
+	plugin_id TEXT PRIMARY KEY, version TEXT NOT NULL,
+	installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	FOREIGN KEY (plugin_id) REFERENCES store_cache(id)
+);
+CREATE TABLE IF NOT EXISTS pending_store_install (
+	plugin_id TEXT PRIMARY KEY, version TEXT NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
 
 func TestClientSync(t *testing.T) {
 	idx := &model.StoreIndex{

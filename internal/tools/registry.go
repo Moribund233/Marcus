@@ -3,84 +3,76 @@ package tools
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 
 	"Marcus/internal/model"
-
-	_ "modernc.org/sqlite"
 )
+
+// Compile-time check: *Registry implements RegistryReader.
+var _ RegistryReader = (*Registry)(nil)
+
+// RegistryReader is the subset of Registry methods needed by Uninstaller.
+type RegistryReader interface {
+	GetTool(id string) (*model.ToolInfo, error)
+	DeleteTool(id string) error
+}
 
 type Registry struct {
 	db *sql.DB
 }
 
-func NewRegistry(dbPath string) (*Registry, error) {
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
-	}
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("ping db: %w", err)
-	}
-	r := &Registry{db: db}
-	if err := r.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	return r, nil
+func NewRegistry(db *sql.DB) *Registry {
+	return &Registry{db: db}
 }
 
 func (r *Registry) Close() error {
 	return r.db.Close()
 }
 
-func (r *Registry) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS tools (
-		id           TEXT PRIMARY KEY,
-		name         TEXT NOT NULL,
-		display_name TEXT NOT NULL,
-		description  TEXT,
-		icon         TEXT,
-		category     TEXT DEFAULT 'other',
-		version      TEXT,
-		source       TEXT NOT NULL,
-		contribution TEXT NOT NULL,
-		package_path TEXT,
-		manifest     TEXT NOT NULL,
-		entry_point  TEXT,
-		enabled      INTEGER DEFAULT 1,
-		last_seen    DATETIME DEFAULT CURRENT_TIMESTAMP,
-		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-	_, err := r.db.Exec(schema)
-	return err
-}
-
 func rowToTool(row scanner) (model.ToolInfo, error) {
 	var t model.ToolInfo
 	var enabled int
 	var lastSeen, createdAt string
+	var lastUsed sql.NullString
 
 	err := row.Scan(
 		&t.ID, &t.Name, &t.DisplayName, &t.Description,
 		&t.Icon, &t.Category, &t.Version, &t.Source,
 		&t.Contribution, &t.PackagePath, &t.Manifest,
-		&t.EntryPoint, &enabled, &lastSeen, &createdAt,
+		&t.EntryPoint, &enabled, &lastSeen, &lastUsed, &createdAt,
 	)
 	if err != nil {
 		return t, err
 	}
 	t.Enabled = enabled != 0
 	t.LastSeen = lastSeen
+	t.LastUsed = lastUsed.String
 	t.CreatedAt = createdAt
 	return t, nil
 }
 
 type scanner interface{ Scan(dest ...any) error }
 
+// toolColumns is the single source of truth for column order.
+// Must match the scan order in rowToTool.
+var toolColumns = []string{
+	"id", "name", "display_name", "description", "icon", "category",
+	"version", "source", "contribution", "package_path", "manifest",
+	"entry_point", "enabled", "last_seen", "last_used", "created_at",
+}
+
+func cols() string {
+	s := ""
+	for i, c := range toolColumns {
+		if i > 0 {
+			s += ", "
+		}
+		s += c
+	}
+	return s
+}
+
 func (r *Registry) ListTools(category string) ([]model.ToolInfo, error) {
-	query := "SELECT * FROM tools WHERE enabled = 1"
+	query := "SELECT " + cols() + " FROM tools WHERE enabled = 1"
 	args := []any{}
 	if category != "" && category != "all" {
 		query += " AND category = ?"
@@ -106,7 +98,7 @@ func (r *Registry) ListTools(category string) ([]model.ToolInfo, error) {
 }
 
 func (r *Registry) GetTool(id string) (*model.ToolInfo, error) {
-	row := r.db.QueryRow("SELECT * FROM tools WHERE id = ?", id)
+	row := r.db.QueryRow("SELECT "+cols()+" FROM tools WHERE id = ?", id)
 	t, err := rowToTool(row)
 	if err != nil {
 		return nil, err
@@ -133,8 +125,8 @@ func upsertTool(execer interface {
 	}
 
 	_, err := execer.Exec(`
-		INSERT INTO tools (id, name, display_name, description, icon, category, version, source, contribution, package_path, manifest, entry_point, enabled, last_seen, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		INSERT INTO tools (`+cols()+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET
 			display_name=excluded.display_name,
 			description=excluded.description,
@@ -162,7 +154,35 @@ func (r *Registry) DeleteTool(id string) error {
 	return err
 }
 
-// DB exposes the underlying connection for LogStore which shares the same file.
-func (r *Registry) DB() *sql.DB {
-	return r.db
+func (r *Registry) UpdateLastUsed(toolID string) error {
+	_, err := r.db.Exec(
+		"UPDATE tools SET last_used = CURRENT_TIMESTAMP WHERE id = ?", toolID,
+	)
+	return err
 }
+
+func (r *Registry) ListRecentTools(limit int) ([]model.ToolInfo, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := r.db.Query(
+		"SELECT "+cols()+" FROM tools WHERE enabled = 1 AND last_used IS NOT NULL ORDER BY last_used DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tools := []model.ToolInfo{}
+	for rows.Next() {
+		t, err := rowToTool(rows)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, t)
+	}
+	return tools, rows.Err()
+}
+
+

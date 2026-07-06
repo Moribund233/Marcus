@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,12 +13,13 @@ import (
 
 type Uninstaller struct {
 	registry *Registry
+	db       *sql.DB
 	toolsDir string
 	lang     string
 }
 
-func NewUninstaller(registry *Registry, toolsDir string) *Uninstaller {
-	return &Uninstaller{registry: registry, toolsDir: toolsDir, lang: "zh-CN"}
+func NewUninstaller(registry *Registry, db *sql.DB, toolsDir string) *Uninstaller {
+	return &Uninstaller{registry: registry, db: db, toolsDir: toolsDir, lang: "zh-CN"}
 }
 
 // SetLanguage updates the language used for user-facing messages.
@@ -210,6 +212,6 @@ func (u *Uninstaller) deleteFromRegistry(toolID string) error {
 }
 
 func (u *Uninstaller) deleteFromStoreInstalled(toolID string) error {
-	_, err := u.registry.DB().Exec("DELETE FROM store_installed WHERE plugin_id = ?", toolID)
+	_, err := u.db.Exec("DELETE FROM store_installed WHERE plugin_id = ?", toolID)
 	return err
 }

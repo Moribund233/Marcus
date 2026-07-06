@@ -133,6 +133,79 @@ func (m *Manager) Shutdown() {
 	}
 }
 
+// RunSync 同步执行一个 terminal/file 工具并返回完整输出。
+// 该方法不会将进程加入 Manager 的跟踪表，适合 Agent 单次工具调用场景。
+func (m *Manager) RunSync(ctx context.Context, manifest model.ToolManifest, args map[string]string) (string, int, error) {
+	switch manifest.Contribution {
+	case model.ContributionTerminal, model.ContributionFile:
+		return m.runTerminalSync(ctx, manifest, args)
+	case model.ContributionWeb:
+		return "", 0, fmt.Errorf("web tools cannot be executed synchronously")
+	default:
+		return "", 0, fmt.Errorf("unknown contribution type: %s", manifest.Contribution)
+	}
+}
+
+func (m *Manager) runTerminalSync(ctx context.Context, manifest model.ToolManifest, args map[string]string) (string, int, error) {
+	var cmdStr string
+	var cmdArgs []string
+
+	switch manifest.Contribution {
+	case model.ContributionTerminal:
+		if manifest.Terminal == nil {
+			return "", 0, fmt.Errorf("terminal manifest is nil")
+		}
+		cmdStr = manifest.Terminal.Command
+		for _, a := range manifest.Terminal.Args {
+			if v, ok := args[a.Name]; ok {
+				cmdArgs = append(cmdArgs, v)
+			}
+		}
+	case model.ContributionFile:
+		if manifest.File == nil {
+			return "", 0, fmt.Errorf("file manifest is nil")
+		}
+		cmdStr = manifest.File.Command
+		for _, a := range manifest.File.Args {
+			if v, ok := args[a.Name]; ok {
+				cmdArgs = append(cmdArgs, v)
+			}
+		}
+		if input, ok := args["input"]; ok {
+			cmdArgs = append([]string{input}, cmdArgs...)
+		}
+	}
+
+	fullPath, err := resolvePath(cmdStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("resolve executable: %w", err)
+	}
+
+	timeout := timeoutOrDefault(m.limits.TimeoutSeconds)
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, fullPath, cmdArgs...)
+	executil.HideWindow(cmd)
+	cmd.Env = buildEnv()
+
+	output, err := cmd.CombinedOutput()
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	if err != nil {
+		if execCtx.Err() == context.DeadlineExceeded {
+			return string(output), exitCode, fmt.Errorf("tool execution timed out after %v", timeout)
+		}
+		// 某些工具返回非零退出码但仍有有用输出，这里一并返回输出。
+		return string(output), exitCode, fmt.Errorf("tool exited with code %d: %w", exitCode, err)
+	}
+
+	return string(output), exitCode, nil
+}
+
 func (m *Manager) track(proc *Process) {
 	m.mu.Lock()
 	m.processes[proc.State.ToolID] = proc

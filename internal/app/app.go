@@ -2,13 +2,19 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"Marcus/internal/agent"
 	"Marcus/internal/config"
+	"Marcus/internal/conversation"
+	marcusdb "Marcus/internal/db"
+	"Marcus/internal/llm"
+	"Marcus/internal/memory"
 	"Marcus/internal/model"
 	"Marcus/internal/runtime"
 	"Marcus/internal/sandbox"
@@ -16,6 +22,8 @@ import (
 	"Marcus/internal/tools"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	_ "modernc.org/sqlite"
 )
 
 type App struct {
@@ -23,6 +31,7 @@ type App struct {
 	cfg     *config.Config
 	cfgPath string
 
+	db      *sql.DB
 	tools   ToolStore
 	logs    LogStore
 	scanner ToolScanner
@@ -33,6 +42,12 @@ type App struct {
 	storeInstaller *store.Installer
 	storeUpdater   *store.Updater
 	uninstaller    *tools.Uninstaller
+
+	// Agent 相关依赖
+	agent     *agent.Agent
+	llmConfig *llm.Config
+	convStore *conversation.Store
+	memStore  *memory.Store
 
 	logFile   *os.File
 	logFileMu sync.Mutex
@@ -64,45 +79,42 @@ func (a *App) Startup(ctx context.Context) {
 	a.setConfig(cfg)
 	a.cfgPath = cfgPath
 
-	reg, err := tools.NewRegistry(a.cfg.DBPath)
+	db, err := sql.Open("sqlite", a.cfg.DBPath)
 	if err != nil {
-		a.writeLog("ERROR", "registry init: "+err.Error())
-		wailsRuntime.LogError(a.ctx, "registry init: "+err.Error())
+		a.writeLog("ERROR", "open db: "+err.Error())
+		wailsRuntime.LogError(a.ctx, "open db: "+err.Error())
 		return
 	}
+	a.db = db
+
+	migrator := marcusdb.NewMigrator(db)
+	migrator.Register(marcusdb.All()...)
+	if err := migrator.Run(); err != nil {
+		a.writeLog("ERROR", "migrate: "+err.Error())
+		wailsRuntime.LogError(a.ctx, "migrate: "+err.Error())
+		return
+	}
+
+	reg := tools.NewRegistry(db)
 	a.tools = reg
-
-	logs, err := tools.NewLogStore(reg.DB())
-	if err != nil {
-		a.writeLog("ERROR", "logstore init: "+err.Error())
-		wailsRuntime.LogError(a.ctx, "logstore init: "+err.Error())
-		return
-	}
-	a.logs = logs
-
+	a.logs = tools.NewLogStore(db)
 	a.scanner = tools.NewScanner(reg, a.cfg.ToolsDir)
 
-	storeClient, err := store.NewClient(reg.DB(), a.cfg.StoreIndexURL)
-	if err != nil {
-		a.writeLog("ERROR", "store client init: "+err.Error())
-		wailsRuntime.LogError(a.ctx, "store client init: "+err.Error())
-	} else {
-		a.storeClient = storeClient
-		a.storeInstaller = store.NewInstaller(reg.DB(), a.cfg.ToolsDir)
-		a.storeUpdater = store.NewUpdater(reg.DB())
+	a.storeClient = store.NewClient(db, a.cfg.StoreIndexURL)
+	a.storeInstaller = store.NewInstaller(db, a.cfg.ToolsDir)
+	a.storeUpdater = store.NewUpdater(db)
 
-		go func() {
-			if _, err := a.storeClient.Sync(); err != nil {
-				a.writeLog("DEBUG", "store initial sync skipped: "+err.Error())
-				wailsRuntime.LogDebug(a.ctx, "store initial sync skipped: "+err.Error())
-			}
-		}()
+	go func() {
+		if _, err := a.storeClient.Sync(); err != nil {
+			a.writeLog("DEBUG", "store initial sync skipped: "+err.Error())
+			wailsRuntime.LogDebug(a.ctx, "store initial sync skipped: "+err.Error())
+		}
+	}()
 
-		// Retry any pending store installs that failed during previous scanning.
-		go a.retryPendingInstalls()
-	}
+	// Retry any pending store installs that failed during previous scanning.
+	go a.retryPendingInstalls()
 
-	a.uninstaller = tools.NewUninstaller(reg, a.cfg.ToolsDir)
+	a.uninstaller = tools.NewUninstaller(reg, db, a.cfg.ToolsDir)
 	a.uninstaller.SetLanguage(a.cfg.Language)
 
 	a.sandbox = sandbox.NewManager(
@@ -128,14 +140,19 @@ func (a *App) Startup(ctx context.Context) {
 			})
 		},
 	)
+
+	if err := a.initAgent(); err != nil {
+		a.writeLog("ERROR", "agent init: "+err.Error())
+		wailsRuntime.LogError(a.ctx, "agent init: "+err.Error())
+	}
 }
 
 func (a *App) Shutdown(ctx context.Context) {
 	if a.sandbox != nil {
 		a.sandbox.Shutdown()
 	}
-	if a.tools != nil {
-		a.tools.Close()
+	if a.db != nil {
+		a.db.Close()
 	}
 }
 
@@ -162,6 +179,7 @@ func (a *App) LaunchTool(toolID string, args map[string]string) (*model.ProcessS
 	}
 
 	a.logs.AddLog(*state)
+	_ = a.tools.UpdateLastUsed(toolID)
 	return state, nil
 }
 
@@ -184,7 +202,14 @@ func (a *App) AddManualTool(name, command, argType string) (model.ToolInfo, erro
 }
 
 func (a *App) DeleteTool(toolID string) error {
-	return a.tools.DeleteTool(toolID)
+	if err := a.tools.DeleteTool(toolID); err != nil {
+		return err
+	}
+	// Clean up store_installed in case this was a store-installed tool.
+	a.db.Exec(
+		`DELETE FROM store_installed WHERE ? LIKE '%' || plugin_id`, toolID,
+	)
+	return nil
 }
 
 func (a *App) UninstallTool(toolID string) (*model.UninstallResult, error) {
@@ -211,6 +236,13 @@ func (a *App) UninstallTool(toolID string) (*model.UninstallResult, error) {
 
 func (a *App) GetToolLogs(toolID string, limit int) ([]model.ProcessState, error) {
 	return a.logs.GetLogs(toolID, limit)
+}
+
+func (a *App) GetRecentTools(limit int) ([]model.ToolInfo, error) {
+	if a.tools == nil {
+		return nil, fmt.Errorf("tools registry not initialized")
+	}
+	return a.tools.ListRecentTools(limit)
 }
 
 func (a *App) GetConfig() *config.Config {

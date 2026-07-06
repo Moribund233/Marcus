@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, Settings2, Monitor, Sliders, Keyboard, Info } from 'lucide-react'
+import { ArrowLeft, Settings2, Monitor, Sliders, Keyboard, Info, Sparkles } from 'lucide-react'
 import { useI18n } from '@/hooks/useI18n'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -8,9 +8,10 @@ import { GeneralTab } from '@/components/settings/GeneralTab'
 import { SandboxTab } from '@/components/settings/SandboxTab'
 import { ShortcutsTab } from '@/components/settings/ShortcutsTab'
 import { AboutTab } from '@/components/settings/AboutTab'
+import { AISettingsTab } from '@/components/settings/AISettingsTab'
 import type { RuntimeInfo } from '@/components/renderer/types'
 
-type SettingsTab = 'general' | 'environment' | 'sandbox' | 'shortcuts' | 'about'
+type SettingsTab = 'general' | 'environment' | 'sandbox' | 'shortcuts' | 'ai' | 'about'
 
 interface SettingsProps {
   runtimeStatus: Record<string, RuntimeInfo>
@@ -28,6 +29,7 @@ export function Settings({ runtimeStatus, runtimeLoading, onRefreshRuntime, onCl
     { id: 'environment', label: t('settings.environment'), icon: <Monitor className="h-4 w-4" /> },
     { id: 'sandbox', label: t('settings.sandbox'), icon: <Sliders className="h-4 w-4" /> },
     { id: 'shortcuts', label: t('settings.shortcuts'), icon: <Keyboard className="h-4 w-4" /> },
+    { id: 'ai', label: t('settings.ai'), icon: <Sparkles className="h-4 w-4" /> },
     { id: 'about', label: t('settings.about'), icon: <Info className="h-4 w-4" /> },
   ]
 
@@ -71,6 +73,7 @@ export function Settings({ runtimeStatus, runtimeLoading, onRefreshRuntime, onCl
         )}
         {tab === 'sandbox' && <SandboxTab />}
         {tab === 'shortcuts' && <ShortcutsTab />}
+        {tab === 'ai' && <AISettingsTab />}
         {tab === 'about' && <AboutTab />}
       </div>
     </div>

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"Marcus/internal/model"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestParseUVToolList(t *testing.T) {
@@ -98,11 +101,15 @@ func TestScanBinary(t *testing.T) {
 	}
 	writeFakeBinary(t, dir, "testbin", manifest)
 
-	reg, err := NewRegistry(filepath.Join(dir, "test.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reg.Close()
+	defer db.Close()
+	if _, err := db.Exec(toolsSchema); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(db)
 
 	s := &Scanner{registry: reg, toolsDir: dir}
 	tools, err := s.ScanBinary()
@@ -134,15 +141,19 @@ func TestScanBinarySkipsNonExecutable(t *testing.T) {
 		},
 	}
 	writeFakeBinary(t, dir, "realbin", manifest)
-	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not an executable"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte(		"not an executable"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	reg, err := NewRegistry(filepath.Join(dir, "test.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reg.Close()
+	defer db.Close()
+	if _, err := db.Exec(toolsSchema); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(db)
 
 	s := &Scanner{registry: reg, toolsDir: dir}
 	tools, err := s.ScanBinary()

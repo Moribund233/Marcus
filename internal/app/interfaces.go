@@ -1,6 +1,10 @@
 package app
 
-import "Marcus/internal/model"
+import (
+	"context"
+
+	"Marcus/internal/model"
+)
 
 // ToolStore manages tool metadata.
 type ToolStore interface {
@@ -8,6 +12,8 @@ type ToolStore interface {
 	GetTool(id string) (*model.ToolInfo, error)
 	UpsertTool(t model.ToolInfo) error
 	DeleteTool(id string) error
+	UpdateLastUsed(toolID string) error
+	ListRecentTools(limit int) ([]model.ToolInfo, error)
 	Close() error
 }
 
@@ -28,6 +34,7 @@ type ProcessManager interface {
 	Stop(toolID string) error
 	GetState(toolID string) *model.ProcessState
 	Shutdown()
+	RunSync(ctx context.Context, manifest model.ToolManifest, args map[string]string) (string, int, error)
 }
 
 // RuntimeChecker probes whether required runtimes are installed.

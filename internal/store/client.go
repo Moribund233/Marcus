@@ -18,48 +18,16 @@ type Client struct {
 	hc       *http.Client
 }
 
-func NewClient(db *sql.DB, indexURL ...string) (*Client, error) {
+func NewClient(db *sql.DB, indexURL ...string) *Client {
 	url := "https://raw.githubusercontent.com/Moribund233/Marcus-plugins/master/index.json"
 	if len(indexURL) > 0 && indexURL[0] != "" {
 		url = indexURL[0]
 	}
-	c := &Client{
+	return &Client{
 		db:       db,
 		indexURL: url,
 		hc:       &http.Client{Timeout: 30 * time.Second},
 	}
-	if err := c.migrate(); err != nil {
-		return nil, fmt.Errorf("store migrate: %w", err)
-	}
-	return c, nil
-}
-
-func (c *Client) migrate() error {
-	_, err := c.db.Exec(`
-		CREATE TABLE IF NOT EXISTS store_cache (
-			id              TEXT PRIMARY KEY,
-			display_name    TEXT NOT NULL,
-			description     TEXT DEFAULT '',
-			categories      TEXT DEFAULT '[]',
-			latest_version  TEXT NOT NULL,
-			versions        TEXT NOT NULL,
-			deprecated      INTEGER DEFAULT 0,
-			deprecation_msg TEXT DEFAULT '',
-			synced_at       DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE TABLE IF NOT EXISTS store_installed (
-			plugin_id    TEXT PRIMARY KEY,
-			version      TEXT NOT NULL,
-			installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (plugin_id) REFERENCES store_cache(id)
-		);
-		CREATE TABLE IF NOT EXISTS pending_store_install (
-			plugin_id   TEXT PRIMARY KEY,
-			version     TEXT NOT NULL,
-			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-	`)
-	return err
 }
 
 // RecordPendingInstall records a plugin whose download+install succeeded but
@@ -224,6 +192,15 @@ func (c *Client) saveToCache(idx *model.StoreIndex) error {
 
 // ListPlugins returns all cached plugins from the local DB.
 func (c *Client) ListPlugins() ([]model.StorePlugin, error) {
+	// Clean up store_installed records whose tools have been removed locally.
+	// Tool IDs in the tools table have a source prefix (e.g. "python:uv:marcus-textstats"),
+	// while store_installed uses the bare plugin ID (e.g. "marcus-textstats").
+	_, _ = c.db.Exec(
+		`DELETE FROM store_installed WHERE NOT EXISTS (
+			SELECT 1 FROM tools WHERE tools.id LIKE '%' || store_installed.plugin_id
+		)`,
+	)
+
 	rows, err := c.db.Query(`
 		SELECT c.id, c.display_name, c.description, c.categories,
 		       c.latest_version, c.versions, c.deprecated, c.deprecation_msg,

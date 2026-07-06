@@ -4,6 +4,7 @@ import (
 	"embed"
 
 	"Marcus/internal/config"
+	"Marcus/internal/llm"
 	"Marcus/internal/model"
 
 	"github.com/wailsapp/wails/v2"
@@ -82,6 +83,10 @@ func (a *App) GetToolLogs(toolID string, limit int) ([]model.ProcessState, error
 	return a.impl.GetToolLogs(toolID, limit)
 }
 
+func (a *App) GetRecentTools(limit int) ([]model.ToolInfo, error) {
+	return a.impl.GetRecentTools(limit)
+}
+
 func (a *App) InstallToolPackage(path string) error {
 	return a.impl.InstallToolPackage(path)
 }
@@ -130,4 +135,46 @@ func (a *App) InstallRuntime(runtimeName string) error {
 
 func (a *App) InstallRuntimeAsync(runtimeName string) error {
 	return a.impl.InstallRuntimeAsync(runtimeName)
+}
+
+// ─── Agent / Chat ───────────────────────────────────────────
+
+func (a *App) CreateConversation(title string) (*model.Conversation, error) {
+	return a.impl.CreateConversation(title)
+}
+
+func (a *App) ListConversations(limit int) ([]model.Conversation, error) {
+	return a.impl.ListConversations(limit)
+}
+
+func (a *App) GetConversationMessages(conversationID string) ([]model.ConversationMessage, error) {
+	return a.impl.GetConversationMessages(conversationID)
+}
+
+func (a *App) DeleteConversation(conversationID string) error {
+	return a.impl.DeleteConversation(conversationID)
+}
+
+func (a *App) SendMessage(conversationID string, userMessage string) (*model.ChatResponse, error) {
+	return a.impl.SendMessage(conversationID, userMessage)
+}
+
+func (a *App) SendMessageStream(conversationID string, userMessage string) error {
+	return a.impl.SendMessageStream(conversationID, userMessage)
+}
+
+func (a *App) GetLLMConfig() (*llm.Config, error) {
+	return a.impl.GetLLMConfig()
+}
+
+func (a *App) SaveLLMConfig(cfg llm.Config) error {
+	return a.impl.SaveLLMConfig(cfg)
+}
+
+func (a *App) TestLLMConnection() error {
+	return a.impl.TestLLMConnection()
+}
+
+func (a *App) GetLLMModels() ([]model.Model, error) {
+	return a.impl.GetLLMModels()
 }

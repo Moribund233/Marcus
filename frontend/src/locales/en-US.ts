@@ -9,6 +9,16 @@ const en: Record<string, string> = {
   'sidebar.refresh': 'Refresh Tools',
   'sidebar.add': 'Add Manual',
   'sidebar.settings': 'Settings',
+  'sidebar.conversations.title': 'Conversations',
+  'sidebar.conversations.new': 'New Conversation',
+  'sidebar.conversations.empty': 'No conversations',
+  'sidebar.conversations.delete': 'Delete Conversation',
+  'sidebar.conversations.deleteTitle': 'Delete Conversation',
+  'sidebar.conversations.deleteConfirm': 'Are you sure you want to delete "{title}"? This action cannot be undone.',
+  'sidebar.tools.title': 'Tool Categories',
+
+  'common.cancel': 'Cancel',
+  'common.delete': 'Delete',
 
   'rightSidebar.running': 'Running',
   'rightSidebar.pinned': 'Pinned',
@@ -92,6 +102,7 @@ const en: Record<string, string> = {
   'settings.environment': 'Environment',
   'settings.sandbox': 'Sandbox',
   'settings.shortcuts': 'Shortcuts',
+  'settings.ai': 'AI',
   'settings.about': 'About',
 
   'general.title': 'General',
@@ -168,11 +179,21 @@ const en: Record<string, string> = {
   'titleBar.hideStatusBar': 'Hide status bar',
   'titleBar.showStatusBar': 'Show status bar',
 
+  'welcome.greeting.morning': 'Good morning',
+  'welcome.greeting.afternoon': 'Good afternoon',
+  'welcome.greeting.evening': 'Good evening',
+  'welcome.subtitle': 'How can I help you?',
+  'welcome.recentConversations': 'Recent Conversations',
+  'welcome.recentTools': 'Recently Used',
+  'welcome.noConversations': 'No conversations yet',
+  'welcome.noRecentTools': 'No recently used tools',
+
   'statusBar.ready': 'Ready',
   'statusBar.checking': 'Checking environment...',
   'statusBar.scanning': 'Scanning tools...',
   'statusBar.toolAdded': 'Tool added: {name}',
   'statusBar.launching': 'Starting {name}...',
+  'statusBar.llmNotConfigured': 'AI not configured',
 
   'toolCard.source': 'Source',
   'toolCard.contribution': 'Contribution',
@@ -194,6 +215,34 @@ const en: Record<string, string> = {
   'statusBar.hasIssues': 'has usability issues',
 
   'env.install': 'Install',
+
+  'chat.comingSoon': 'Chat page is under development...',
+  'chat.empty': 'Select or create a conversation to start chatting',
+  'chat.welcome': 'What can I help you with?',
+  'chat.loadingMessages': 'Loading messages...',
+  'chat.thinking': 'Thinking...',
+  'chat.inputPlaceholder': 'Type a message and press Enter',
+  'chat.clearError': 'Clear error',
+  'chat.message.user': 'User',
+  'chat.message.assistant': 'Assistant',
+
+  'aiSettings.title': 'AI Settings',
+  'aiSettings.desc': 'Configure LLM provider and connection parameters',
+  'aiSettings.provider': 'Provider',
+  'aiSettings.apiKey': 'API Key',
+  'aiSettings.apiKeyPlaceholder': 'Enter API Key',
+  'aiSettings.apiKeyDesc': 'API Key will be encrypted and stored locally',
+  'aiSettings.model': 'Model',
+  'aiSettings.loadModels': 'Load Models',
+  'aiSettings.selectModel': 'Select a model',
+  'aiSettings.baseUrl': 'Base URL',
+  'aiSettings.baseUrlPlaceholder': 'Optional, for custom endpoints or local Ollama',
+  'aiSettings.baseUrlDesc': 'Leave blank to use the default endpoint',
+  'aiSettings.save': 'Save',
+  'aiSettings.saveSuccess': 'Configuration saved',
+  'aiSettings.testConnection': 'Test Connection',
+  'aiSettings.testSuccess': 'Connection successful',
+  'aiSettings.loading': 'Loading configuration...',
 }
 
 export default en

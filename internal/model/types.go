@@ -130,8 +130,9 @@ type ToolInfo struct {
 	Healthy      bool             `json:"healthy,omitempty"`
 	HealthError  string           `json:"health_error,omitempty"`
 	HealthHint   string           `json:"health_hint,omitempty"`
-	LastSeen     string           `json:"last_seen"`
-	CreatedAt    string           `json:"created_at"`
+		LastSeen     string           `json:"last_seen"`
+		LastUsed     string           `json:"last_used"`
+		CreatedAt    string           `json:"created_at"`
 }
 
 func (t ToolInfo) ManifestAsManifest() (ToolManifest, error) {

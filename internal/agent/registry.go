@@ -1,0 +1,250 @@
+// Package agent 实现了 Marcus LLM Agent 的核心逻辑。
+//
+// 包括工具注册表、Prompt 管理、工具执行器、TAO 循环以及长期记忆集成。
+package agent
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"Marcus/internal/model"
+)
+
+// Registry 维护从 Marcus 工具到 LLM ToolDefinition 的映射。
+type Registry struct {
+	// definitions 保存暴露给 LLM 的工具定义，key 为 tool ID。
+	definitions map[string]model.ToolDefinition
+	// manifests 保存原始 ToolManifest，key 为 tool ID，供执行器使用。
+	manifests map[string]*model.ToolManifest
+}
+
+// NewRegistry 创建一个新的工具注册表。
+func NewRegistry() *Registry {
+	return &Registry{
+		definitions: make(map[string]model.ToolDefinition),
+		manifests:   make(map[string]*model.ToolManifest),
+	}
+}
+
+// RegisterFromManifest 从 ToolManifest 自动生成并注册 LLM ToolDefinition。
+func (r *Registry) RegisterFromManifest(manifest *model.ToolManifest) error {
+	if manifest == nil {
+		return fmt.Errorf("manifest is nil")
+	}
+	if manifest.ID == "" {
+		return fmt.Errorf("manifest id is empty")
+	}
+
+	params, err := convertParams(manifest)
+	if err != nil {
+		return fmt.Errorf("convert params for %s: %w", manifest.ID, err)
+	}
+
+	desc := manifest.Description
+	if desc == "" {
+		desc = fmt.Sprintf("Execute the %s tool.", manifest.DisplayName)
+	}
+
+	def := model.ToolDefinition{
+		Type: "function",
+		Function: model.ToolFunctionDefinition{
+			Name:        manifest.ID,
+			Description: desc,
+			Parameters:  params,
+		},
+	}
+
+	r.definitions[manifest.ID] = def
+	r.manifests[manifest.ID] = manifest
+	return nil
+}
+
+// RegisterMemoryTool 注册 Agent 用于自我管理长期记忆的特殊工具。
+func (r *Registry) RegisterMemoryTool() {
+	def := model.ToolDefinition{
+		Type: "function",
+		Function: model.ToolFunctionDefinition{
+			Name:        "memory",
+			Description: "Manage long-term memory: add, replace, or remove stable facts and user preferences.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"action": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"add", "replace", "remove"},
+						"description": "Action to perform on memory.",
+					},
+					"scope": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"user", "project", "global"},
+						"description": "Memory scope. Default: global",
+					},
+					"key": map[string]interface{}{
+						"type": "string",
+						"description": "Short unique key for substring matching",
+					},
+					"content": map[string]interface{}{
+						"type": "string",
+						"description": "Full memory content (required for add/replace)",
+					},
+					"old_text": map[string]interface{}{
+						"type": "string",
+						"description": "Substring of the existing entry to replace/remove",
+					},
+				},
+				"required": []string{"action", "key"},
+			},
+		},
+	}
+	r.definitions["memory"] = def
+}
+
+// GetToolDefinitions 返回所有已注册的 LLM 工具定义，按名称排序。
+func (r *Registry) GetToolDefinitions() []model.ToolDefinition {
+	ids := make([]string, 0, len(r.definitions))
+	for id := range r.definitions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	defs := make([]model.ToolDefinition, 0, len(ids))
+	for _, id := range ids {
+		defs = append(defs, r.definitions[id])
+	}
+	return defs
+}
+
+// GetManifest 返回指定 tool ID 的原始 ToolManifest。
+func (r *Registry) GetManifest(toolID string) (*model.ToolManifest, bool) {
+	m, ok := r.manifests[toolID]
+	return m, ok
+}
+
+// convertParams 根据 contribution 类型转换参数为 JSON Schema。
+func convertParams(manifest *model.ToolManifest) (map[string]interface{}, error) {
+	switch manifest.Contribution {
+	case model.ContributionTerminal:
+		return convertTerminalParams(manifest.Terminal), nil
+	case model.ContributionWeb:
+		return convertWebParams(manifest.Web), nil
+	case model.ContributionFile:
+		return convertFileParams(manifest.File), nil
+	default:
+		return nil, fmt.Errorf("unsupported contribution type: %s", manifest.Contribution)
+	}
+}
+
+// convertTerminalParams 将 TerminalManifest 转换为 JSON Schema。
+func convertTerminalParams(tm *model.TerminalManifest) map[string]interface{} {
+	properties := make(map[string]interface{})
+	required := make([]string, 0)
+
+	if tm != nil {
+		for _, arg := range tm.Args {
+			prop := terminalArgToProperty(arg)
+			properties[arg.Name] = prop
+			if arg.Default == nil {
+				required = append(required, arg.Name)
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+}
+
+// convertFileParams 将 FileManifest 转换为 JSON Schema。
+func convertFileParams(fm *model.FileManifest) map[string]interface{} {
+	properties := make(map[string]interface{})
+	required := make([]string, 0)
+
+	if fm != nil {
+		inputType := "string"
+		switch fm.InputType {
+		case "files":
+			inputType = "array"
+		case "directory":
+			inputType = "string"
+		default:
+			inputType = "string"
+		}
+
+		inputProp := map[string]interface{}{
+			"type":        inputType,
+			"description": fmt.Sprintf("Input %s for the tool.", fm.InputType),
+		}
+		if len(fm.InputExtensions) > 0 {
+			inputProp["description"] = fmt.Sprintf("Input %s. Supported extensions: %s.",
+				fm.InputType, strings.Join(fm.InputExtensions, ", "))
+		}
+		properties["input"] = inputProp
+		required = append(required, "input")
+
+		for _, arg := range fm.Args {
+			properties[arg.Name] = terminalArgToProperty(arg)
+			if arg.Default == nil {
+				required = append(required, arg.Name)
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+}
+
+// convertWebParams 将 WebManifest 转换为 JSON Schema。
+func convertWebParams(wm *model.WebManifest) map[string]interface{} {
+	properties := make(map[string]interface{})
+	required := make([]string, 0)
+
+	if wm != nil {
+		if wm.Port > 0 {
+			properties["port"] = map[string]interface{}{
+				"type":        "integer",
+				"description": "Port to run the web service on.",
+				"default":     wm.Port,
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+}
+
+// terminalArgToProperty 将 TerminalArg 转换为 JSON Schema 属性。
+func terminalArgToProperty(arg model.TerminalArg) map[string]interface{} {
+	prop := map[string]interface{}{
+		"type":        argTypeToJSONSchema(arg.Type),
+		"description": arg.Label,
+	}
+	if arg.Default != nil {
+		prop["default"] = arg.Default
+	}
+	return prop
+}
+
+// argTypeToJSONSchema 将 Marcus 参数类型映射为 JSON Schema 类型。
+func argTypeToJSONSchema(t string) string {
+	switch t {
+	case "number":
+		return "number"
+	case "integer":
+		return "integer"
+	case "boolean":
+		return "boolean"
+	case "array":
+		return "array"
+	default:
+		return "string"
+	}
+}

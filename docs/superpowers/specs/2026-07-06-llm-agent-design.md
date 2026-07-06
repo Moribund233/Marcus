@@ -410,27 +410,30 @@ CREATE TABLE llm_config (
 ## 8. 实现计划
 
 ### Phase 1: 基础设施 (1-2 天)
-- [ ] 创建 `internal/llm/` 模块
-- [ ] 实现 Provider 接口
-- [ ] 添加 OpenAI 提供者实现
+- [x] 创建 `internal/llm/` 模块
+- [x] 实现 Provider 接口
+- [x] 添加 OpenAI 提供者实现
 
 ### Phase 2: Agent Core (2-3 天)
-- [ ] 创建 `internal/agent/` 模块
-- [ ] 实现 TAO 循环
-- [ ] 工具注册表
+- [x] 创建 `internal/agent/` 模块
+- [x] 实现 TAO 循环
+- [x] 工具注册表
+- [x] 创建 `internal/memory/` 模块（长期记忆）
+- [x] 实现记忆 CRUD、容量检查与 `memory` 工具
+- [x] 修改 PromptManager 注入记忆冻结快照
 
 ### Phase 3: 对话存储 (1 天)
-- [ ] 创建 `internal/conversation/` 模块
-- [ ] SQLite Schema
+- [x] 创建 `internal/conversation/` 模块
+- [x] SQLite Schema
 
 ### Phase 4: 前端 (3-4 天)
-- [ ] 侧边栏重构
-- [ ] 聊天界面
-- [ ] 设置页面
+- [x] 侧边栏重构
+- [x] 聊天界面
+- [x] 设置页面
 
 ### Phase 5: 集成测试 (1-2 天)
-- [ ] 端到端测试
-- [ ] 错误处理
+- [x] 端到端测试
+- [x] 错误处理
 
 ---
 
@@ -483,3 +486,228 @@ func (c *ContextCompressor) Compress(messages []Message) []Message {
     // 对旧消息进行摘要
 }
 ```
+
+---
+
+## 11. 记忆系统（补充设计）
+
+> 参考 Hermes Agent 的核心设计：其记忆系统并非简单的 "remember this" 字段，而是由**持久化记忆（事实/偏好）**、**程序性技能（Skills）**和**会话搜索**组成的分层架构。Hermes 通过 `MEMORY.md`、`USER.md`、`SOUL.md` 等文件在会话开始时以**冻结快照**注入系统 Prompt，从而保证前缀缓存命中并降低上下文成本。
+>
+> 对于 Marcus，我们不需要复刻 Hermes 完整的多层记忆与 Skills 自进化能力，但需要实现一个**轻量、可扩展的记忆层**，让 Agent 能够记住用户偏好、常用路径、项目约定等稳定事实，并在后续会话中自动应用。
+
+### 11.1 设计目标
+
+- 跨会话持久化稳定事实与用户偏好
+- 让 Agent 在系统 Prompt 中自动携带相关记忆
+- 允许 Agent 通过工具自我管理记忆（添加/替换/删除）
+- 保持实现简单，不引入外部向量数据库或复杂检索
+
+### 11.2 记忆分层
+
+| 层级 | 名称 | 用途 | 存储方式 | 注入方式 |
+|------|------|------|----------|----------|
+| L1 | 会话记忆 | 当前对话上下文 | `conversations`/`messages` 表 | 作为 Messages 传入 LLM |
+| L2 | 长期记忆 | 用户偏好、环境事实、项目约定 | `memories` 表 + 可选 MEMORY.md | 冻结快照注入系统 Prompt |
+| L3（可选） | 技能记忆 | 常用工具组合或工作流 | `skills` 表 / Markdown 文件 | 按关键词匹配后注入 |
+
+**初期实现范围**：完成 L1（已有）和 L2；L3 作为后续扩展预留。
+
+### 11.3 数据模型
+
+```go
+// internal/memory/model.go
+type MemoryEntry struct {
+    ID        string    // 唯一标识
+    Scope     string    // "user" | "project" | "global"
+    Key       string    // 简短键名，用于子字符串匹配
+    Content   string    // 记忆内容
+    Source    string    // 来源："agent" | "manual" | "imported"
+    CreatedAt time.Time
+    UpdatedAt time.Time
+}
+
+type MemoryStats struct {
+    TotalChars int
+    MaxChars   int
+    Usage      float64 // 0.0 - 1.0
+}
+```
+
+### 11.4 数据库 Schema
+
+```sql
+-- 长期记忆表
+CREATE TABLE IF NOT EXISTS memories (
+    id          TEXT PRIMARY KEY,
+    scope       TEXT NOT NULL DEFAULT 'global',
+    key         TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'agent',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 可选：技能记忆表（预留）
+CREATE TABLE IF NOT EXISTS skills (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    tags        TEXT,  -- JSON 数组
+    content     TEXT NOT NULL,
+    use_count   INTEGER DEFAULT 0,
+    last_used   DATETIME,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 11.5 系统 Prompt 注入格式
+
+每次 `Agent.Run` 启动时，从 `memory store` 加载冻结快照，按以下格式追加到系统 Prompt 末尾：
+
+```text
+══════════════════════════════════════════════════
+MEMORY (long-term facts) [45% — 990/2,200 chars]
+══════════════════════════════════════════════════
+用户偏好使用中文回复
+§
+常用项目路径：D:\Project\go\Marcus
+§
+图片处理工具默认输出到桌面
+```
+
+注入规则：
+- 仅注入 `scope='user'` 或 `scope='global'` 的条目
+- 总字符上限默认 2,200（与 Hermes 对齐），可配置
+- 采用**冻结快照**：本次会话中记忆变更会持久化，但已构建的系统 Prompt 不变，直到下次 Run 才刷新
+
+### 11.6 memory 工具设计
+
+Agent 通过调用 `memory` 工具管理长期记忆，无需用户手动编辑。
+
+```go
+// internal/agent/tools/memory.go
+var MemoryTool = ToolDefinition{
+    Name:        "memory",
+    Description: "Manage long-term memory: add, replace, or remove stable facts and user preferences.",
+    Parameters: map[string]interface{}{
+        "type": "object",
+        "properties": map[string]interface{}{
+            "action": map[string]interface{}{
+                "type": "string",
+                "enum": []string{"add", "replace", "remove"},
+            },
+            "scope": map[string]interface{}{
+                "type": "string",
+                "enum": []string{"user", "project", "global"},
+                "description": "Memory scope. Default: global",
+            },
+            "key": map[string]interface{}{
+                "type": "string",
+                "description": "Short unique key for substring matching",
+            },
+            "content": map[string]interface{}{
+                "type": "string",
+                "description": "Full memory content (required for add/replace)",
+            },
+            "old_text": map[string]interface{}{
+                "type": "string",
+                "description": "Substring of the existing entry to replace/remove",
+            },
+        },
+        "required": []string{"action", "key"},
+    },
+}
+```
+
+操作语义：
+- `add`：新增一条记忆；若 `key` 已存在则更新
+- `replace`：通过 `old_text` 子字符串匹配并替换内容
+- `remove`：通过 `old_text` 子字符串匹配并删除条目
+
+### 11.7 容量管理
+
+```go
+// internal/memory/store.go
+const DefaultMemoryLimit = 2200 // 字符
+
+func (s *Store) CheckLimit(scope string) (*MemoryStats, error) {
+    // 统计 scope 下所有 content 字符数
+    // 返回使用百分比和建议
+}
+
+func (s *Store) Add(entry MemoryEntry) error {
+    // 1. 检查容量
+    // 2. 若超出，返回错误并让 LLM 决定替换/删除哪些条目
+    // 3. 插入或更新
+}
+```
+
+当记忆接近上限时，Agent 应收到系统提示：
+
+```text
+记忆容量接近上限（90%）。请考虑删除或合并不再相关的条目。
+```
+
+### 11.8 新增模块
+
+```
+internal/
+├── memory/
+│   ├── store.go          # 记忆持久化
+│   ├── model.go          # 数据模型
+│   ├── tool.go           # memory 工具定义
+│   └── prompt.go         # 记忆快照渲染
+```
+
+### 11.9 与 Agent Core 集成
+
+```go
+// internal/agent/core.go
+func (a *Agent) Run(ctx context.Context, sessionID string, userMessage string) error {
+    // 1. 加载长期记忆快照
+    memorySnapshot := a.memoryStore.BuildSnapshot()
+    
+    // 2. 构建系统提示词（包含记忆快照）
+    systemPrompt := a.promptMgr.BuildSystemPrompt(memorySnapshot)
+    
+    // 3. 加载会话历史
+    history := a.store.GetMessages(sessionID)
+    
+    // 4. TAO 循环（原有逻辑）
+    // ...
+}
+```
+
+### 11.10 实现计划补充
+
+在原有 Phase 2（Agent Core）中增加以下任务：
+
+- [x] 创建 `internal/memory/` 模块与 SQLite Schema
+- [x] 实现记忆 CRUD 与容量检查
+- [x] 实现 `memory` 工具并注册到 Agent
+- [x] 修改 `PromptManager`，注入记忆冻结快照
+- [x] 为记忆系统编写单元测试
+
+---
+
+## 12. 参考资源补充
+
+- [Hermes Agent 持久化记忆](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/features/memory)
+- [Hermes Agent Memory Providers](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/features/memory-providers)
+- [Inside Hermes' Three-Layer Memory](https://hermes-agent.ai/blog/hermes-agent-memory-system)
+
+---
+
+## 13. 体验优化项
+
+在核心功能实现之后，针对聊天交互与状态感知完成以下优化：
+
+- [x] **ChatPage 错误提示**：发送消息失败时在输入框上方显示错误横幅，支持一键清除
+  - 相关文件：`frontend/src/components/chat/ChatPage.tsx`
+- [x] **侧边栏会话删除确认**：删除历史会话前弹出二次确认对话框，防止误操作
+  - 相关文件：`frontend/src/components/sidebar.tsx`
+- [x] **状态栏 LLM 状态显示**：在底部状态栏右侧展示当前配置的 LLM 提供者与模型名称
+  - 相关文件：`frontend/src/components/status-bar.tsx`、`frontend/src/App.tsx`
+- [x] **流式聊天响应**：后端通过 Wails 事件逐步推送助手回复片段，前端以打字机效果实时渲染
+  - 相关文件：`internal/app/agent.go`、`frontend/src/hooks/useChat.ts`、`frontend/src/components/chat/ChatPage.tsx`

@@ -9,6 +9,16 @@ const zh: Record<string, string> = {
   'sidebar.refresh': '刷新工具列表',
   'sidebar.add': '手动添加',
   'sidebar.settings': '设置',
+  'sidebar.conversations.title': '会话',
+  'sidebar.conversations.new': '新会话',
+  'sidebar.conversations.empty': '暂无会话',
+  'sidebar.conversations.delete': '删除会话',
+  'sidebar.conversations.deleteTitle': '删除会话',
+  'sidebar.conversations.deleteConfirm': '确定要删除会话「{title}」吗？此操作无法撤销。',
+  'sidebar.tools.title': '工具分类',
+
+  'common.cancel': '取消',
+  'common.delete': '删除',
 
   'rightSidebar.running': '运行中',
   'rightSidebar.pinned': '固定',
@@ -92,6 +102,7 @@ const zh: Record<string, string> = {
   'settings.environment': '运行环境',
   'settings.sandbox': '沙箱',
   'settings.shortcuts': '快捷键',
+  'settings.ai': 'AI',
   'settings.about': '关于',
 
   'general.title': '通用',
@@ -168,11 +179,21 @@ const zh: Record<string, string> = {
   'titleBar.hideStatusBar': '隐藏状态栏',
   'titleBar.showStatusBar': '显示状态栏',
 
+  'welcome.greeting.morning': '早上好',
+  'welcome.greeting.afternoon': '下午好',
+  'welcome.greeting.evening': '晚上好',
+  'welcome.subtitle': '有什么可以帮您的？',
+  'welcome.recentConversations': '最近会话',
+  'welcome.recentTools': '最近使用',
+  'welcome.noConversations': '暂无会话',
+  'welcome.noRecentTools': '暂无最近使用的工具',
+
   'statusBar.ready': '就绪',
   'statusBar.checking': '环境检查...',
   'statusBar.scanning': '正在扫描工具...',
   'statusBar.toolAdded': '已添加工具: {name}',
   'statusBar.launching': '正在启动 {name}...',
+  'statusBar.llmNotConfigured': 'AI 未配置',
 
   'toolCard.source': '来源',
   'toolCard.contribution': '贡献类型',
@@ -194,6 +215,34 @@ const zh: Record<string, string> = {
   'statusBar.hasIssues': '有可用性问题',
 
   'env.install': '安装',
+
+  'chat.comingSoon': '聊天页面开发中...',
+  'chat.empty': '请选择或创建一个会话开始聊天',
+  'chat.welcome': '有什么可以帮您的？',
+  'chat.loadingMessages': '加载消息中...',
+  'chat.thinking': '思考中...',
+  'chat.inputPlaceholder': '输入消息，按 Enter 发送',
+  'chat.clearError': '清除错误',
+  'chat.message.user': '用户',
+  'chat.message.assistant': '助手',
+
+  'aiSettings.title': 'AI 设置',
+  'aiSettings.desc': '配置大语言模型 Provider 与连接参数',
+  'aiSettings.provider': 'Provider',
+  'aiSettings.apiKey': 'API Key',
+  'aiSettings.apiKeyPlaceholder': '输入 API Key',
+  'aiSettings.apiKeyDesc': 'API Key 将在本地加密存储',
+  'aiSettings.model': '模型',
+  'aiSettings.loadModels': '获取模型列表',
+  'aiSettings.selectModel': '选择模型',
+  'aiSettings.baseUrl': 'Base URL',
+  'aiSettings.baseUrlPlaceholder': '可选，用于自定义端点或本地 Ollama',
+  'aiSettings.baseUrlDesc': '留空则使用默认端点',
+  'aiSettings.save': '保存',
+  'aiSettings.saveSuccess': '配置已保存',
+  'aiSettings.testConnection': '测试连接',
+  'aiSettings.testSuccess': '连接成功',
+  'aiSettings.loading': '加载配置中...',
 }
 
 export default zh

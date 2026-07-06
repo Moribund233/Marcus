@@ -20,6 +20,10 @@ type Config struct {
 	Theme           string `json:"theme"`
 	Language        string `json:"language"`
 	StoreIndexURL   string `json:"store_index_url"`
+
+	// LLM 默认配置（更详细的 provider 级配置保存在数据库 llm_config 表中）
+	DefaultLLMProvider string `json:"default_llm_provider"`
+	DefaultLLMModel    string `json:"default_llm_model"`
 }
 
 func Default() *Config {

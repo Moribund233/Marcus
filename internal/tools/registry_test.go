@@ -1,24 +1,40 @@
 package tools
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"Marcus/internal/model"
+
+	_ "modernc.org/sqlite"
 )
 
 func newTestRegistry(t *testing.T) *Registry {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	reg, err := NewRegistry(dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
+		t.Fatalf("sql.Open: %v", err)
 	}
-	t.Cleanup(func() { reg.Close() })
-	return reg
+	t.Cleanup(func() { db.Close() })
+
+	if _, err := db.Exec(toolsSchema); err != nil {
+		t.Fatalf("create tools table: %v", err)
+	}
+	return NewRegistry(db)
 }
+
+const toolsSchema = `CREATE TABLE IF NOT EXISTS tools (
+	id TEXT PRIMARY KEY, name TEXT NOT NULL, display_name TEXT NOT NULL,
+	description TEXT, icon TEXT, category TEXT DEFAULT 'other', version TEXT,
+	source TEXT NOT NULL, contribution TEXT NOT NULL, package_path TEXT,
+	manifest TEXT NOT NULL, entry_point TEXT, enabled INTEGER DEFAULT 1,
+	last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, last_used DATETIME,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
 
 func TestRegistryUpsertAndGet(t *testing.T) {
 	reg := newTestRegistry(t)
@@ -190,14 +206,10 @@ func TestRegistryClose(t *testing.T) {
 	}
 }
 
-func TestDBExposed(t *testing.T) {
+func TestRegistryNew(t *testing.T) {
 	reg := newTestRegistry(t)
-	db := reg.DB()
-	if db == nil {
-		t.Fatal("DB() returned nil")
-	}
-	if err := db.Ping(); err != nil {
-		t.Fatalf("db.Ping: %v", err)
+	if reg == nil {
+		t.Fatal("NewRegistry returned nil")
 	}
 }
 
@@ -205,10 +217,14 @@ func TestRegistryDBFileCleanup(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "marcus.db")
 
-	reg, err := NewRegistry(dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
+		t.Fatalf("sql.Open: %v", err)
 	}
+	if _, err := db.Exec(toolsSchema); err != nil {
+		t.Fatalf("create tools table: %v", err)
+	}
+	reg := NewRegistry(db)
 
 	// Write a tool and close.
 	reg.UpsertTool(model.ToolInfo{
@@ -223,12 +239,12 @@ func TestRegistryDBFileCleanup(t *testing.T) {
 		t.Fatal("DB file was not created on disk")
 	}
 
-	// Re-open and verify data persisted.
-	reg2, err := NewRegistry(dbPath)
+	db2, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("NewRegistry (reopen): %v", err)
+		t.Fatalf("sql.Open (reopen): %v", err)
 	}
-	defer reg2.Close()
+	defer db2.Close()
+	reg2 := NewRegistry(db2)
 
 	tool, err := reg2.GetTool("python:persist")
 	if err != nil {

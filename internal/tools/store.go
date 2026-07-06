@@ -11,29 +11,8 @@ type LogStore struct {
 	db *sql.DB
 }
 
-func NewLogStore(db *sql.DB) (*LogStore, error) {
-	s := &LogStore{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *LogStore) migrate() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS tool_runtime_log (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			tool_id     TEXT NOT NULL,
-			pid         INTEGER,
-			status      TEXT,
-			started_at  DATETIME,
-			stopped_at  DATETIME,
-			exit_code   INTEGER,
-			port        INTEGER,
-			error_log   TEXT
-		);
-	`)
-	return err
+func NewLogStore(db *sql.DB) *LogStore {
+	return &LogStore{db: db}
 }
 
 func (s *LogStore) AddLog(entry model.ProcessState) error {
