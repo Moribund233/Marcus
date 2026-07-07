@@ -20,15 +20,17 @@ type Agent struct {
 	convStore     *conversation.Store
 	memoryStore   *memory.Store
 	maxIterations int
+	compressor    *ContextCompressor
 }
 
 // Config 用于创建 Agent 实例。
 type Config struct {
-	LLM           llm.Provider
-	Runner        SyncRunner
-	ConvStore     *conversation.Store
-	MemoryStore   *memory.Store
-	MaxIterations int
+	LLM              llm.Provider
+	Runner           SyncRunner
+	ConvStore        *conversation.Store
+	MemoryStore      *memory.Store
+	MaxIterations    int
+	MaxContextTokens int
 }
 
 // NewAgent 创建一个新的 Agent 实例。
@@ -40,6 +42,11 @@ func NewAgent(cfg Config) *Agent {
 		cfg.MaxIterations = 10
 	}
 
+	maxTokens := cfg.MaxContextTokens
+	if maxTokens <= 0 {
+		maxTokens = 8192
+	}
+
 	return &Agent{
 		llm:           cfg.LLM,
 		registry:      registry,
@@ -48,6 +55,7 @@ func NewAgent(cfg Config) *Agent {
 		convStore:     cfg.ConvStore,
 		memoryStore:   cfg.MemoryStore,
 		maxIterations: cfg.MaxIterations,
+		compressor:    NewContextCompressor(maxTokens, 0.85),
 	}
 }
 
@@ -154,6 +162,7 @@ func (a *Agent) buildSystemPrompt() (string, error) {
 }
 
 // buildMessageHistory 从对话存储加载历史并组装为 LLM 消息列表。
+// 当历史消息估算 token 数超过阈值时，会自动压缩历史以控制上下文长度。
 func (a *Agent) buildMessageHistory(conversationID, systemPrompt string) ([]model.Message, error) {
 	history := []model.Message{
 		{Role: model.RoleSystem, Content: systemPrompt},
@@ -174,12 +183,17 @@ func (a *Agent) buildMessageHistory(conversationID, systemPrompt string) ([]mode
 		case model.RoleTool:
 			for _, r := range msg.ToolResults {
 				history = append(history, model.Message{
-					Role:    model.RoleTool,
-					Name:    r.Name,
-					Content: r.Content,
+					Role:       model.RoleTool,
+					Name:       r.Name,
+					Content:    r.Content,
+					ToolCallID: r.ToolCallID,
 				})
 			}
 		}
+	}
+
+	if a.compressor != nil && a.compressor.ShouldCompress(history) {
+		history = a.compressor.Compress(history)
 	}
 
 	return history, nil

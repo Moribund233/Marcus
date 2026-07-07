@@ -13,8 +13,22 @@ import (
 	"Marcus/internal/llm"
 	"Marcus/internal/memory"
 	"Marcus/internal/model"
+
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// getModelContext 返回指定模型 ID 的上下文长度；若找不到则返回 0，由调用方决定默认值。
+func getModelContext(provider llm.Provider, modelID string) int {
+	if provider == nil {
+		return 0
+	}
+	for _, m := range provider.Models() {
+		if m.ID == modelID {
+			return m.Context
+		}
+	}
+	return 0
+}
 
 // initAgent 初始化 Agent、LLM Provider、对话存储和记忆存储。
 // 该方法在 Startup 中调用，使用与 tools registry 同一个 SQLite 连接。
@@ -49,10 +63,11 @@ func (a *App) initAgent() error {
 	}
 
 	agentCfg := agent.Config{
-		LLM:         provider,
-		Runner:      a.sandbox,
-		ConvStore:   convStore,
-		MemoryStore: memStore,
+		LLM:              provider,
+		Runner:           a.sandbox,
+		ConvStore:        convStore,
+		MemoryStore:      memStore,
+		MaxContextTokens: getModelContext(provider, llmCfg.Model),
 	}
 	ag := agent.NewAgent(agentCfg)
 	a.registerTools(ag)
@@ -109,12 +124,13 @@ func (a *App) saveLLMConfig(cfg llm.Config) error {
 	}
 
 	_, err = a.db.Exec(
-		`INSERT INTO llm_config (provider, api_key, model, base_url)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO llm_config (provider, api_key, model, base_url, updated_at)
+		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(provider) DO UPDATE SET
 			 api_key=excluded.api_key,
 			 model=excluded.model,
-			 base_url=excluded.base_url`,
+			 base_url=excluded.base_url,
+			 updated_at=CURRENT_TIMESTAMP`,
 		string(cfg.Provider), encryptedKey, cfg.Model, cfg.BaseURL,
 	)
 	if err != nil {
@@ -161,10 +177,11 @@ func (a *App) refreshAgentProvider() error {
 		return err
 	}
 	ag := agent.NewAgent(agent.Config{
-		LLM:         provider,
-		Runner:      a.sandbox,
-		ConvStore:   a.convStore,
-		MemoryStore: a.memStore,
+		LLM:              provider,
+		Runner:           a.sandbox,
+		ConvStore:        a.convStore,
+		MemoryStore:      a.memStore,
+		MaxContextTokens: getModelContext(provider, a.llmConfig.Model),
 	})
 	a.registerTools(ag)
 	a.agent = ag

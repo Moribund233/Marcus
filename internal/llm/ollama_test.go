@@ -172,3 +172,26 @@ func TestOllamaChatError(t *testing.T) {
 		t.Fatal("expected error for 404 response")
 	}
 }
+
+// TestOllamaTestConnection 验证连接测试端点使用 GET 方法。
+func TestOllamaTestConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET method, got %s", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"models":[]}`)
+	}))
+	defer server.Close()
+
+	provider := NewOllama(Config{
+		BaseURL: server.URL,
+	})
+
+	if err := provider.TestConnection(context.Background()); err != nil {
+		t.Fatalf("test connection failed: %v", err)
+	}
+}

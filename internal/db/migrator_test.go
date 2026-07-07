@@ -119,6 +119,45 @@ func TestMigrator_MigrationFails(t *testing.T) {
 	}
 }
 
+// TestMigrator_LLMConfigAndSkillsSchema 验证 llm_config 扩展列与 skills 表已创建。
+func TestMigrator_LLMConfigAndSkillsSchema(t *testing.T) {
+	db := openTestDB(t)
+	m := NewMigrator(db)
+	m.Register(All()...)
+
+	if err := m.Run(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	columns := map[string]bool{}
+	rows, err := db.Query("SELECT name FROM pragma_table_info('llm_config')")
+	if err != nil {
+		t.Fatalf("query llm_config columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+
+	for _, col := range []string{"provider", "api_key", "model", "base_url", "enabled", "updated_at"} {
+		if !columns[col] {
+			t.Errorf("llm_config missing column: %s", col)
+		}
+	}
+
+	var tableCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='skills'").Scan(&tableCount); err != nil {
+		t.Fatalf("check skills table: %v", err)
+	}
+	if tableCount != 1 {
+		t.Errorf("skills table not created")
+	}
+}
+
 func getAppliedIDs(db *sql.DB) ([]string, error) {
 	// schema_migrations might not exist yet.
 	rows, err := db.Query("SELECT id FROM schema_migrations ORDER BY id")

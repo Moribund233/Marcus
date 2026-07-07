@@ -189,11 +189,14 @@ func TestOpenAIChatError(t *testing.T) {
 	}
 }
 
-// TestOpenAITestConnection 验证连接测试端点。
+// TestOpenAITestConnection 验证连接测试端点使用 GET 方法。
 func TestOpenAITestConnection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET method, got %s", r.Method)
 		}
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"data":[]}`)
@@ -207,5 +210,48 @@ func TestOpenAITestConnection(t *testing.T) {
 
 	if err := provider.TestConnection(context.Background()); err != nil {
 		t.Fatalf("test connection failed: %v", err)
+	}
+}
+
+// TestOpenAIChat_ToolResultMessage 验证 tool 结果消息携带 tool_call_id。
+func TestOpenAIChat_ToolResultMessage(t *testing.T) {
+	var capturedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"done"}}],"usage":{}}`)
+	}))
+	defer server.Close()
+
+	provider := NewOpenAI(Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+		Model:   "gpt-4o",
+	})
+
+	_, err := provider.Chat(context.Background(), &model.ChatRequest{
+		Model: "gpt-4o",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "hi"},
+			{Role: model.RoleTool, Name: "test", Content: "result", ToolCallID: "call_1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("chat failed: %v", err)
+	}
+
+	msgs, ok := capturedBody["messages"].([]interface{})
+	if !ok || len(msgs) < 2 {
+		t.Fatalf("unexpected request messages: %v", capturedBody["messages"])
+	}
+	toolMsg, ok := msgs[1].(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected tool message type")
+	}
+	if toolMsg["tool_call_id"] != "call_1" {
+		t.Errorf("tool_call_id = %v, want call_1", toolMsg["tool_call_id"])
 	}
 }

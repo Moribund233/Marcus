@@ -56,7 +56,7 @@ func (o *Ollama) Chat(ctx context.Context, req *model.ChatRequest) (*model.ChatR
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := o.newRequest(ctx, "/api/chat", body)
+	httpReq, err := o.newRequest(ctx, http.MethodPost, "/api/chat", body)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func (o *Ollama) ChatStream(ctx context.Context, req *model.ChatRequest) (<-chan
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := o.newRequest(ctx, "/api/chat", body)
+	httpReq, err := o.newRequest(ctx, http.MethodPost, "/api/chat", body)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (o *Ollama) ChatStream(ctx context.Context, req *model.ChatRequest) (<-chan
 
 // TestConnection 测试本地 Ollama 服务是否可达，调用 /api/tags 端点。
 func (o *Ollama) TestConnection(ctx context.Context) error {
-	httpReq, err := o.newRequest(ctx, "/api/tags", nil)
+	httpReq, err := o.newRequest(ctx, http.MethodGet, "/api/tags", nil)
 	if err != nil {
 		return err
 	}
@@ -126,14 +126,14 @@ func (o *Ollama) TestConnection(ctx context.Context) error {
 }
 
 // newRequest 创建 HTTP 请求。
-func (o *Ollama) newRequest(ctx context.Context, path string, body []byte) (*http.Request, error) {
+func (o *Ollama) newRequest(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
 
 	url := strings.TrimRight(o.cfg.BaseURL, "/") + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

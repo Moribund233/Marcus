@@ -25,13 +25,15 @@ type Message struct {
 	Content string      `json:"content"`
 	// Name 用于 tool 角色的消息，标识该消息来自哪个工具调用。
 	Name string `json:"name,omitempty"`
+	// ToolCallID 用于 tool 角色的消息，与 assistant 消息中的 tool_calls 一一对应（OpenAI 必需）。
+	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall 表示 LLM 请求调用某个工具。
 type ToolCall struct {
-	ID       string                 `json:"id"`
-	Type     string                 `json:"type"`
-	Function ToolCallFunction       `json:"function"`
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
 	// Extra 保留provider特定的原始字段。
 	Extra map[string]interface{} `json:"extra,omitempty"`
 }
@@ -52,8 +54,8 @@ type ToolCallResult struct {
 
 // ToolDefinition 表示暴露给 LLM 的工具定义（JSON Schema 格式）。
 type ToolDefinition struct {
-	Type        string                 `json:"type"`
-	Function    ToolFunctionDefinition `json:"function"`
+	Type     string                 `json:"type"`
+	Function ToolFunctionDefinition `json:"function"`
 	// Extra 保留provider特定的扩展字段。
 	Extra map[string]interface{} `json:"extra,omitempty"`
 }

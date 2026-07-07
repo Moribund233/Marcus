@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -40,6 +41,12 @@ func (pm *PromptManager) BuildSystemPrompt(memoryPrompt string) string {
 		b.WriteString("Available tools:\n")
 		for _, tool := range tools {
 			b.WriteString(fmt.Sprintf("- %s: %s\n", tool.Function.Name, tool.Function.Description))
+			if len(tool.Function.Parameters) > 0 {
+				schemaJSON, err := json.MarshalIndent(tool.Function.Parameters, "  ", "  ")
+				if err == nil {
+					b.WriteString(fmt.Sprintf("  Parameters schema:\n%s\n", schemaJSON))
+				}
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -53,8 +60,9 @@ func (pm *PromptManager) BuildSystemPrompt(memoryPrompt string) string {
 // BuildToolResultMessage 将 ToolCallResult 构建为适合 LLM 的消息。
 func (pm *PromptManager) BuildToolResultMessage(result model.ToolCallResult) model.Message {
 	return model.Message{
-		Role:    model.RoleTool,
-		Name:    result.Name,
-		Content: result.Content,
+		Role:       model.RoleTool,
+		Name:       result.Name,
+		Content:    result.Content,
+		ToolCallID: result.ToolCallID,
 	}
 }

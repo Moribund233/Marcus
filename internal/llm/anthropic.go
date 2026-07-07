@@ -55,7 +55,7 @@ func (a *Anthropic) Chat(ctx context.Context, req *model.ChatRequest) (*model.Ch
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := a.newRequest(ctx, "/messages", body)
+	httpReq, err := a.newRequest(ctx, http.MethodPost, "/messages", body)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, req *model.ChatRequest) (<-c
 		}
 	}
 
-	httpReq, err := a.newRequest(ctx, "/messages", body)
+	httpReq, err := a.newRequest(ctx, http.MethodPost, "/messages", body)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, req *model.ChatRequest) (<-c
 
 // TestConnection 测试 API 连通性，调用 /models 端点。
 func (a *Anthropic) TestConnection(ctx context.Context) error {
-	httpReq, err := a.newRequest(ctx, "/models", nil)
+	httpReq, err := a.newRequest(ctx, http.MethodGet, "/models", nil)
 	if err != nil {
 		return err
 	}
@@ -151,14 +151,14 @@ func (a *Anthropic) TestConnection(ctx context.Context) error {
 }
 
 // newRequest 创建带有认证头的 HTTP 请求。
-func (a *Anthropic) newRequest(ctx context.Context, path string, body []byte) (*http.Request, error) {
+func (a *Anthropic) newRequest(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
 
 	url := strings.TrimRight(a.cfg.BaseURL, "/") + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

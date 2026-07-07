@@ -174,3 +174,27 @@ func TestAnthropicChatError(t *testing.T) {
 		t.Fatalf("error should contain 401: %v", err)
 	}
 }
+
+// TestAnthropicTestConnection 验证连接测试端点使用 GET 方法。
+func TestAnthropicTestConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET method, got %s", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"data":[]}`)
+	}))
+	defer server.Close()
+
+	provider := NewAnthropic(Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	if err := provider.TestConnection(context.Background()); err != nil {
+		t.Fatalf("test connection failed: %v", err)
+	}
+}

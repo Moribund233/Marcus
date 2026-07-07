@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+)
 
 // All 返回所有 schema 迁移定义。
 // 每条迁移按时间戳排序，新迁移追加到末尾。
@@ -176,6 +179,58 @@ func All() []Migration {
 				_, err := tx.Exec(`
 					CREATE INDEX IF NOT EXISTS idx_messages_conversation
 					ON messages(conversation_id, created_at)
+				`)
+				return err
+			},
+		},
+		{
+			ID:   "20240707_update_llm_config",
+			Desc: "Add enabled and updated_at columns to llm_config",
+			Up: func(tx *sql.Tx) error {
+				columns := []struct {
+					name string
+					def  string
+				}{
+					{"enabled", "INTEGER DEFAULT 1"},
+					{"updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP"},
+				}
+				for _, col := range columns {
+					var count int
+					err := tx.QueryRow(
+						"SELECT COUNT(*) FROM pragma_table_info('llm_config') WHERE name = ?",
+						col.name,
+					).Scan(&count)
+					if err != nil {
+						return fmt.Errorf("check column %s: %w", col.name, err)
+					}
+					if count == 0 {
+						if _, err := tx.Exec(fmt.Sprintf(
+							"ALTER TABLE llm_config ADD COLUMN %s %s",
+							col.name, col.def,
+						)); err != nil {
+							return fmt.Errorf("add column %s: %w", col.name, err)
+						}
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:   "20240707_create_skills",
+			Desc: "Create skills table for reusable tool workflows",
+			Up: func(tx *sql.Tx) error {
+				_, err := tx.Exec(`
+					CREATE TABLE IF NOT EXISTS skills (
+						id          TEXT PRIMARY KEY,
+						name        TEXT NOT NULL,
+						description TEXT,
+						tags        TEXT,
+						content     TEXT NOT NULL,
+						use_count   INTEGER DEFAULT 0,
+						last_used   DATETIME,
+						created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+						updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+					)
 				`)
 				return err
 			},

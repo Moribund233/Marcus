@@ -59,7 +59,7 @@ func (o *OpenAI) Chat(ctx context.Context, req *model.ChatRequest) (*model.ChatR
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := o.newRequest(ctx, "/chat/completions", body)
+	httpReq, err := o.newRequest(ctx, http.MethodPost, "/chat/completions", body)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (o *OpenAI) ChatStream(ctx context.Context, req *model.ChatRequest) (<-chan
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := o.newRequest(ctx, "/chat/completions", body)
+	httpReq, err := o.newRequest(ctx, http.MethodPost, "/chat/completions", body)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (o *OpenAI) ChatStream(ctx context.Context, req *model.ChatRequest) (<-chan
 
 // TestConnection 测试 API 连通性，调用 /models 端点。
 func (o *OpenAI) TestConnection(ctx context.Context) error {
-	httpReq, err := o.newRequest(ctx, "/models", nil)
+	httpReq, err := o.newRequest(ctx, http.MethodGet, "/models", nil)
 	if err != nil {
 		return err
 	}
@@ -129,14 +129,14 @@ func (o *OpenAI) TestConnection(ctx context.Context) error {
 }
 
 // newRequest 创建带有认证头的 HTTP 请求。
-func (o *OpenAI) newRequest(ctx context.Context, path string, body []byte) (*http.Request, error) {
+func (o *OpenAI) newRequest(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
 
 	url := strings.TrimRight(o.cfg.BaseURL, "/") + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -151,9 +151,10 @@ func (o *OpenAI) buildRequestBody(req *model.ChatRequest, stream bool) ([]byte, 
 	messages := make([]openAIMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		messages = append(messages, openAIMessage{
-			Role:    string(m.Role),
-			Content: m.Content,
-			Name:    m.Name,
+			Role:       string(m.Role),
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
 		})
 	}
 

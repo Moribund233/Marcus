@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"Marcus/internal/conversation"
@@ -210,5 +211,84 @@ func TestAgentRun_ConversationNotFound(t *testing.T) {
 	_, err := ag.Run(context.Background(), "non-existent-id", "hi")
 	if err == nil {
 		t.Fatal("expected error for missing conversation")
+	}
+}
+
+// TestBuildMessageHistory_ToolCallID 验证 tool 结果消息会携带 ToolCallID。
+func TestBuildMessageHistory_ToolCallID(t *testing.T) {
+	ag, db := newTestAgent(t, nil)
+	defer db.Close()
+
+	conv, err := ag.convStore.CreateConversation("ToolCallID Test")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	if _, err := ag.convStore.AddAssistantMessage(conv.ID, "", []model.ToolCall{
+		{ID: "call_abc", Type: "function", Function: model.ToolCallFunction{Name: "test_tool"}},
+	}); err != nil {
+		t.Fatalf("add assistant message: %v", err)
+	}
+	if _, err := ag.convStore.AddToolResults(conv.ID, []model.ToolCallResult{
+		{ToolCallID: "call_abc", Name: "test_tool", Role: "tool", Content: "result"},
+	}); err != nil {
+		t.Fatalf("add tool results: %v", err)
+	}
+
+	history, err := ag.buildMessageHistory(conv.ID, "system prompt")
+	if err != nil {
+		t.Fatalf("build message history: %v", err)
+	}
+
+	var found bool
+	for _, m := range history {
+		if m.Role == model.RoleTool && m.ToolCallID == "call_abc" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected tool message with ToolCallID 'call_abc' in history")
+	}
+}
+
+// TestBuildSystemPrompt_IncludesSchema 验证系统提示词中包含工具参数 Schema。
+func TestBuildSystemPrompt_IncludesSchema(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterMemoryTool()
+	pm := NewPromptManager(registry)
+
+	prompt := pm.BuildSystemPrompt("")
+	if !strings.Contains(prompt, "Parameters schema") {
+		t.Errorf("expected system prompt to contain 'Parameters schema', got:\n%s", prompt)
+	}
+}
+
+// TestBuildMessageHistory_Compression 验证超过 token 阈值时历史消息会被压缩。
+func TestBuildMessageHistory_Compression(t *testing.T) {
+	ag, db := newTestAgent(t, nil)
+	defer db.Close()
+
+	// 强制压缩器只能保留极少消息。
+	ag.compressor = NewContextCompressor(32, 0.5)
+
+	conv, err := ag.convStore.CreateConversation("Compression Test")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		if _, err := ag.convStore.AddMessage(conv.ID, model.RoleUser, "this is a relatively long message content to exceed the tiny limit"); err != nil {
+			t.Fatalf("add message: %v", err)
+		}
+	}
+
+	history, err := ag.buildMessageHistory(conv.ID, "system prompt")
+	if err != nil {
+		t.Fatalf("build message history: %v", err)
+	}
+
+	if len(history) >= 12 { // system + 10 user messages
+		t.Errorf("expected history to be compressed, got %d messages", len(history))
 	}
 }
