@@ -126,8 +126,8 @@ func (a *Anthropic) ChatStream(ctx context.Context, req *model.ChatRequest) (<-c
 		return nil, a.readError(resp)
 	}
 
-	ch := make(chan *model.ChatChunk)
-	go a.streamResponse(resp.Body, ch)
+	ch := make(chan *model.ChatChunk, 16)
+	go a.streamResponse(ctx, resp.Body, ch)
 	return ch, nil
 }
 
@@ -247,9 +247,18 @@ func (a *Anthropic) parseResponse(apiResp *anthropicResponse) (*model.ChatRespon
 }
 
 // streamResponse 解析 Anthropic SSE 流。
-func (a *Anthropic) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChunk) {
+func (a *Anthropic) streamResponse(ctx context.Context, body io.ReadCloser, ch chan<- *model.ChatChunk) {
 	defer close(ch)
 	defer body.Close()
+
+	send := func(chunk *model.ChatChunk) bool {
+		select {
+		case ch <- chunk:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -257,11 +266,14 @@ func (a *Anthropic) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChun
 	var buffer strings.Builder
 	var pendingTool *model.ToolCall
 
-	flushTool := func() {
+	flushTool := func() bool {
 		if pendingTool != nil {
-			ch <- &model.ChatChunk{ToolCalls: []model.ToolCall{*pendingTool}}
+			if !send(&model.ChatChunk{ToolCalls: []model.ToolCall{*pendingTool}}) {
+				return false
+			}
 			pendingTool = nil
 		}
+		return true
 	}
 
 	for scanner.Scan() {
@@ -273,13 +285,13 @@ func (a *Anthropic) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChun
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			flushTool()
-			ch <- &model.ChatChunk{Done: true}
+			send(&model.ChatChunk{Done: true})
 			return
 		}
 
 		var event anthropicStreamEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			ch <- &model.ChatChunk{Error: fmt.Errorf("decode stream chunk: %w", err), Done: true}
+			send(&model.ChatChunk{Error: fmt.Errorf("decode stream chunk: %w", err), Done: true})
 			return
 		}
 
@@ -295,7 +307,9 @@ func (a *Anthropic) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChun
 			}
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
-				flushTool()
+				if !flushTool() {
+					return
+				}
 				pendingTool = &model.ToolCall{
 					ID:   event.ContentBlock.ID,
 					Type: "function",
@@ -306,29 +320,33 @@ func (a *Anthropic) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChun
 			}
 		case "message_delta":
 			if event.Usage.OutputTokens > 0 {
-				ch <- &model.ChatChunk{
+				if !send(&model.ChatChunk{
 					Usage: &model.Usage{CompletionTokens: event.Usage.OutputTokens},
+				}) {
+					return
 				}
 			}
 		case "message_stop":
 			flushTool()
-			ch <- &model.ChatChunk{Done: true}
+			send(&model.ChatChunk{Done: true})
 			return
 		}
 
 		if buffer.Len() > 0 {
-			ch <- &model.ChatChunk{Content: buffer.String()}
+			if !send(&model.ChatChunk{Content: buffer.String()}) {
+				return
+			}
 			buffer.Reset()
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		ch <- &model.ChatChunk{Error: fmt.Errorf("read stream: %w", err), Done: true}
+		send(&model.ChatChunk{Error: fmt.Errorf("read stream: %w", err), Done: true})
 		return
 	}
 
 	flushTool()
-	ch <- &model.ChatChunk{Done: true}
+	send(&model.ChatChunk{Done: true})
 }
 
 // readError 读取非 200 响应的错误信息。

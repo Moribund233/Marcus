@@ -258,7 +258,7 @@ func TestBuildSystemPrompt_IncludesSchema(t *testing.T) {
 	registry.RegisterMemoryTool()
 	pm := NewPromptManager(registry)
 
-	prompt := pm.BuildSystemPrompt("")
+	prompt := pm.BuildSystemPrompt("", "")
 	if !strings.Contains(prompt, "Parameters schema") {
 		t.Errorf("expected system prompt to contain 'Parameters schema', got:\n%s", prompt)
 	}

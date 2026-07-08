@@ -4,10 +4,24 @@ package model
 type LLMProvider string
 
 const (
-	LLMProviderOpenAI    LLMProvider = "openai"
-	LLMProviderAnthropic LLMProvider = "anthropic"
-	LLMProviderOllama    LLMProvider = "ollama"
+	LLMProviderOpenAI     LLMProvider = "openai"
+	LLMProviderAnthropic  LLMProvider = "anthropic"
+	LLMProviderOllama     LLMProvider = "ollama"
+	LLMProviderDeepSeek   LLMProvider = "deepseek"
+	LLMProviderGroq       LLMProvider = "groq"
+	LLMProviderOpenRouter LLMProvider = "openrouter"
+	LLMProviderTogether   LLMProvider = "together"
 )
+
+// ProviderInfo 描述一个 LLM 供应商的展示信息，用于前端动态渲染配置界面。
+type ProviderInfo struct {
+	Provider      LLMProvider `json:"provider"`
+	Name          string      `json:"name"`
+	Adapter       string      `json:"adapter"`
+	DefaultModel  string      `json:"default_model"`
+	DefaultBaseURL string     `json:"default_base_url"`
+	NeedAPIKey    bool        `json:"need_api_key"`
+}
 
 // MessageRole 表示对话消息的角色。
 type MessageRole string
@@ -27,6 +41,8 @@ type Message struct {
 	Name string `json:"name,omitempty"`
 	// ToolCallID 用于 tool 角色的消息，与 assistant 消息中的 tool_calls 一一对应（OpenAI 必需）。
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ToolCalls 用于 assistant 角色的消息，表示 LLM 请求调用的工具列表。
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ToolCall 表示 LLM 请求调用某个工具。
@@ -156,6 +172,19 @@ type MemoryEntry struct {
 	Source    string      `json:"source"`
 	CreatedAt string      `json:"created_at"`
 	UpdatedAt string      `json:"updated_at"`
+}
+
+// SkillEntry 表示一条技能记忆（L3），记录可复用的工具工作流。
+type SkillEntry struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Tags        string `json:"tags,omitempty"` // JSON 数组字符串
+	Content     string `json:"content"`
+	UseCount    int    `json:"use_count"`
+	LastUsed    string `json:"last_used,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // MemoryStats 表示记忆的容量统计。

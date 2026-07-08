@@ -3,6 +3,7 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 
 	"Marcus/internal/model"
 )
@@ -54,9 +55,9 @@ func (c *ContextCompressor) EstimateTokens(messages []model.Message) int {
 }
 
 // Compress 对消息历史进行压缩：保留系统提示和最近的用户/助手消息，
-// 对较早的消息进行摘要合并。
+// 始终确保第一条用户消息不被丢弃，以维持 TAO 循环的初始上下文。
 //
-// 当前实现为简化版：直接丢弃系统提示之后的旧消息，仅保留最近的 N 条。
+// 当前实现为简化版：丢弃系统提示之后的旧消息，仅保留最近的 N 条。
 // 后续可引入 LLM 摘要生成更智能的压缩结果。
 func (c *ContextCompressor) Compress(messages []model.Message) []model.Message {
 	if len(messages) == 0 {
@@ -71,32 +72,59 @@ func (c *ContextCompressor) Compress(messages []model.Message) []model.Message {
 		startIdx = 1
 	}
 
+	// 找到第一条用户消息，确保不被压缩掉。
+	firstUserIdx := -1
+	for i := startIdx; i < len(messages); i++ {
+		if messages[i].Role == model.RoleUser {
+			firstUserIdx = i
+			break
+		}
+	}
+
 	// 计算在阈值内最多能保留多少条消息。
 	maxTokens := int(float64(c.maxTokens) * c.threshold)
-	keep := 0
-	current := 0
+	preserve := []int{}
+	if firstUserIdx >= 0 {
+		preserve = append(preserve, firstUserIdx)
+	}
+	current := c.EstimateTokens(toMessages(messages, preserve))
+	if systemMsg != nil {
+		current += c.EstimateTokens([]model.Message{*systemMsg})
+	}
+
 	for i := len(messages) - 1; i >= startIdx; i-- {
+		if firstUserIdx >= 0 && i == firstUserIdx {
+			continue
+		}
 		tokens := c.EstimateTokens([]model.Message{messages[i]})
-		if current+tokens > maxTokens && keep > 0 {
+		if current+tokens > maxTokens && len(preserve) > 1 {
 			break
 		}
 		current += tokens
-		keep++
+		preserve = append(preserve, i)
 	}
 
-	result := make([]model.Message, 0, keep+1)
+	// 按原始顺序排序
+	sort.Ints(preserve)
+
+	result := make([]model.Message, 0, len(preserve)+1)
 	if systemMsg != nil {
 		result = append(result, *systemMsg)
 	}
-	if keep > 0 {
-		start := len(messages) - keep
-		if start < startIdx {
-			start = startIdx
-		}
-		result = append(result, messages[start:]...)
+	for _, idx := range preserve {
+		result = append(result, messages[idx])
 	}
 
 	return result
+}
+
+// toMessages 按索引列表提取消息。
+func toMessages(all []model.Message, indices []int) []model.Message {
+	msgs := make([]model.Message, 0, len(indices))
+	for _, idx := range indices {
+		msgs = append(msgs, all[idx])
+	}
+	return msgs
 }
 
 // Summary 返回当前压缩器的配置信息。

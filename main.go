@@ -178,3 +178,7 @@ func (a *App) TestLLMConnection() error {
 func (a *App) GetLLMModels() ([]model.Model, error) {
 	return a.impl.GetLLMModels()
 }
+
+func (a *App) GetSupportedProviders() []model.ProviderInfo {
+	return a.impl.GetSupportedProviders()
+}

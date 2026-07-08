@@ -13,6 +13,7 @@ import (
 	"Marcus/internal/llm"
 	"Marcus/internal/memory"
 	"Marcus/internal/model"
+	"Marcus/internal/skill"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -30,7 +31,7 @@ func getModelContext(provider llm.Provider, modelID string) int {
 	return 0
 }
 
-// initAgent 初始化 Agent、LLM Provider、对话存储和记忆存储。
+// initAgent 初始化 Agent、LLM Provider、对话存储、记忆存储和技能存储。
 // 该方法在 Startup 中调用，使用与 tools registry 同一个 SQLite 连接。
 func (a *App) initAgent() error {
 	if a.tools == nil {
@@ -39,6 +40,7 @@ func (a *App) initAgent() error {
 
 	convStore := conversation.NewStore(a.db)
 	memStore := memory.NewStore(a.db, memory.DefaultMemoryLimit)
+	skStore := skill.NewStore(a.db)
 
 	// LLM Provider 配置
 	llmCfg, err := a.loadLLMConfig()
@@ -67,6 +69,7 @@ func (a *App) initAgent() error {
 		Runner:           a.sandbox,
 		ConvStore:        convStore,
 		MemoryStore:      memStore,
+		SkillStore:       skStore,
 		MaxContextTokens: getModelContext(provider, llmCfg.Model),
 	}
 	ag := agent.NewAgent(agentCfg)
@@ -143,7 +146,9 @@ func (a *App) saveLLMConfig(cfg llm.Config) error {
 	_ = a.cfg.Save(a.cfgPath)
 	a.configMu.Unlock()
 
+	a.agentMu.Lock()
 	a.llmConfig = &cfg
+	a.agentMu.Unlock()
 	return nil
 }
 
@@ -169,22 +174,31 @@ func (a *App) registerTools(ag *agent.Agent) {
 }
 
 func (a *App) refreshAgentProvider() error {
-	if a.llmConfig == nil {
+	a.agentMu.RLock()
+	llmCfg := a.llmConfig
+	a.agentMu.RUnlock()
+
+	if llmCfg == nil {
 		return fmt.Errorf("llm config not loaded")
 	}
-	provider, err := llm.NewProvider(*a.llmConfig)
+	provider, err := llm.NewProvider(*llmCfg)
 	if err != nil {
 		return err
 	}
+	skStore := skill.NewStore(a.db)
 	ag := agent.NewAgent(agent.Config{
 		LLM:              provider,
 		Runner:           a.sandbox,
 		ConvStore:        a.convStore,
 		MemoryStore:      a.memStore,
-		MaxContextTokens: getModelContext(provider, a.llmConfig.Model),
+		SkillStore:       skStore,
+		MaxContextTokens: getModelContext(provider, llmCfg.Model),
 	})
 	a.registerTools(ag)
+
+	a.agentMu.Lock()
 	a.agent = ag
+	a.agentMu.Unlock()
 	return nil
 }
 
@@ -224,23 +238,33 @@ func (a *App) DeleteConversation(conversationID string) error {
 
 // SendMessage 向 Agent 发送用户消息并返回最终助手回复。
 func (a *App) SendMessage(conversationID string, userMessage string) (*model.ChatResponse, error) {
-	if a.agent == nil {
+	a.agentMu.RLock()
+	ag := a.agent
+	llmCfg := a.llmConfig
+	a.agentMu.RUnlock()
+
+	if ag == nil {
 		return nil, fmt.Errorf("agent not initialized")
 	}
-	if a.llmConfig == nil || a.llmConfig.APIKey == "" {
+	if llmCfg == nil || llmCfg.APIKey == "" {
 		return nil, fmt.Errorf("llm not configured")
 	}
-	return a.agent.Run(context.Background(), conversationID, userMessage)
+	return ag.Run(context.Background(), conversationID, userMessage)
 }
 
 // SendMessageStream 以流式方式向 Agent 发送用户消息。
 // 该方法先完成完整的 Agent TAO 循环（包括工具调用），然后将最终助手回复
 // 通过 Wails 事件以打字机效果逐步推送到前端。
 func (a *App) SendMessageStream(conversationID string, userMessage string) error {
-	if a.agent == nil {
+	a.agentMu.RLock()
+	ag := a.agent
+	llmCfg := a.llmConfig
+	a.agentMu.RUnlock()
+
+	if ag == nil {
 		return fmt.Errorf("agent not initialized")
 	}
-	if a.llmConfig == nil || a.llmConfig.APIKey == "" {
+	if llmCfg == nil || llmCfg.APIKey == "" {
 		return fmt.Errorf("llm not configured")
 	}
 	if a.ctx == nil {
@@ -252,7 +276,7 @@ func (a *App) SendMessageStream(conversationID string, userMessage string) error
 			"conversation_id": conversationID,
 		})
 
-		resp, err := a.agent.Run(context.Background(), conversationID, userMessage)
+		resp, err := ag.Run(context.Background(), conversationID, userMessage)
 		if err != nil {
 			wailsRuntime.EventsEmit(a.ctx, "chat:stream:error", map[string]string{
 				"conversation_id": conversationID,
@@ -286,11 +310,15 @@ func (a *App) SendMessageStream(conversationID string, userMessage string) error
 
 // GetLLMConfig 返回当前 LLM 配置（API Key 已解密）。
 func (a *App) GetLLMConfig() (*llm.Config, error) {
-	if a.llmConfig == nil {
+	a.agentMu.RLock()
+	llmCfg := a.llmConfig
+	a.agentMu.RUnlock()
+
+	if llmCfg == nil {
 		return nil, fmt.Errorf("llm config not initialized")
 	}
 	// 返回副本，避免外部修改内部状态。
-	cfg := *a.llmConfig
+	cfg := *llmCfg
 	return &cfg, nil
 }
 
@@ -307,20 +335,33 @@ func (a *App) SaveLLMConfig(cfg llm.Config) error {
 
 // TestLLMConnection 测试当前 LLM 配置是否能连通。
 func (a *App) TestLLMConnection() error {
-	if a.llmConfig == nil {
+	a.agentMu.RLock()
+	llmCfg := a.llmConfig
+	a.agentMu.RUnlock()
+
+	if llmCfg == nil {
 		return fmt.Errorf("llm config not initialized")
 	}
-	provider, err := llm.NewProvider(*a.llmConfig)
+	provider, err := llm.NewProvider(*llmCfg)
 	if err != nil {
 		return err
 	}
 	return provider.TestConnection(context.Background())
 }
 
+// GetSupportedProviders 返回注册表中所有支持的 LLM 供应商列表。
+func (a *App) GetSupportedProviders() []model.ProviderInfo {
+	return llm.DefaultRegistry().List()
+}
+
 // GetLLMModels 返回当前 Provider 支持的模型列表。
 func (a *App) GetLLMModels() ([]model.Model, error) {
-	if a.agent == nil || a.agent.LLMProvider() == nil {
+	a.agentMu.RLock()
+	ag := a.agent
+	a.agentMu.RUnlock()
+
+	if ag == nil || ag.LLMProvider() == nil {
 		return nil, fmt.Errorf("agent or llm provider not initialized")
 	}
-	return a.agent.LLMProvider().Models(), nil
+	return ag.LLMProvider().Models(), nil
 }

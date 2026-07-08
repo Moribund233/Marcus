@@ -9,6 +9,7 @@ import (
 	"Marcus/internal/llm"
 	"Marcus/internal/memory"
 	"Marcus/internal/model"
+	"Marcus/internal/skill"
 )
 
 // Agent 是 Marcus LLM Agent 的核心，负责运行 TAO（Thought-Action-Observation）循环。
@@ -19,6 +20,7 @@ type Agent struct {
 	executor      *Executor
 	convStore     *conversation.Store
 	memoryStore   *memory.Store
+	skillStore    *skill.Store
 	maxIterations int
 	compressor    *ContextCompressor
 }
@@ -29,6 +31,7 @@ type Config struct {
 	Runner           SyncRunner
 	ConvStore        *conversation.Store
 	MemoryStore      *memory.Store
+	SkillStore       *skill.Store
 	MaxIterations    int
 	MaxContextTokens int
 }
@@ -54,6 +57,7 @@ func NewAgent(cfg Config) *Agent {
 		executor:      NewExecutor(registry, cfg.Runner, cfg.MemoryStore),
 		convStore:     cfg.ConvStore,
 		memoryStore:   cfg.MemoryStore,
+		skillStore:    cfg.SkillStore,
 		maxIterations: cfg.MaxIterations,
 		compressor:    NewContextCompressor(maxTokens, 0.85),
 	}
@@ -85,7 +89,7 @@ func (a *Agent) Run(ctx context.Context, conversationID string, userMessage stri
 		return nil, fmt.Errorf("save user message: %w", err)
 	}
 
-	systemPrompt, err := a.buildSystemPrompt()
+	systemPrompt, err := a.buildSystemPrompt(userMessage)
 	if err != nil {
 		return nil, fmt.Errorf("build system prompt: %w", err)
 	}
@@ -148,8 +152,8 @@ func (a *Agent) ensureConversation(id string) error {
 	return nil
 }
 
-// buildSystemPrompt 构建包含记忆快照的系统提示词。
-func (a *Agent) buildSystemPrompt() (string, error) {
+// buildSystemPrompt 构建包含记忆快照和技能匹配的系统提示词。
+func (a *Agent) buildSystemPrompt(userMessage string) (string, error) {
 	var memoryPrompt string
 	if a.memoryStore != nil {
 		snapshot, err := a.memoryStore.BuildSnapshot()
@@ -158,7 +162,20 @@ func (a *Agent) buildSystemPrompt() (string, error) {
 		}
 		memoryPrompt = a.memoryStore.RenderPrompt(snapshot)
 	}
-	return a.promptMgr.BuildSystemPrompt(memoryPrompt), nil
+
+	var skillsPrompt string
+	if a.skillStore != nil && userMessage != "" {
+		keywords := skill.ExtractKeywords(userMessage)
+		if len(keywords) > 0 {
+			matched, err := a.skillStore.Match(keywords)
+			if err != nil {
+				return "", fmt.Errorf("match skills: %w", err)
+			}
+			skillsPrompt = skill.RenderSkillsPrompt(matched)
+		}
+	}
+
+	return a.promptMgr.BuildSystemPrompt(memoryPrompt, skillsPrompt), nil
 }
 
 // buildMessageHistory 从对话存储加载历史并组装为 LLM 消息列表。
@@ -175,10 +192,16 @@ func (a *Agent) buildMessageHistory(conversationID, systemPrompt string) ([]mode
 
 	for _, msg := range msgs {
 		switch msg.Role {
-		case model.RoleUser, model.RoleAssistant:
+		case model.RoleUser:
 			history = append(history, model.Message{
 				Role:    msg.Role,
 				Content: msg.Content,
+			})
+		case model.RoleAssistant:
+			history = append(history, model.Message{
+				Role:      msg.Role,
+				Content:   msg.Content,
+				ToolCalls: msg.ToolCalls,
 			})
 		case model.RoleTool:
 			for _, r := range msg.ToolResults {

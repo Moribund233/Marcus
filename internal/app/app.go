@@ -49,6 +49,8 @@ type App struct {
 	convStore *conversation.Store
 	memStore  *memory.Store
 
+	agentMu sync.RWMutex
+
 	logFile   *os.File
 	logFileMu sync.Mutex
 	configMu  sync.RWMutex

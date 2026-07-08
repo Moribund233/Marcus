@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"Marcus/internal/model"
 )
 
@@ -101,8 +103,8 @@ func (o *Ollama) ChatStream(ctx context.Context, req *model.ChatRequest) (<-chan
 		return nil, o.readError(resp)
 	}
 
-	ch := make(chan *model.ChatChunk)
-	go o.streamResponse(resp.Body, ch)
+	ch := make(chan *model.ChatChunk, 16)
+	go o.streamResponse(ctx, resp.Body, ch)
 	return ch, nil
 }
 
@@ -191,14 +193,7 @@ func (o *Ollama) parseResponse(apiResp *ollamaChatResponse) (*model.ChatResponse
 	}
 
 	for _, tc := range apiResp.Message.ToolCalls {
-		args, _ := json.Marshal(tc.Function.Arguments)
-		result.ToolCalls = append(result.ToolCalls, model.ToolCall{
-			Type: "function",
-			Function: model.ToolCallFunction{
-				Name:      tc.Function.Name,
-				Arguments: string(args),
-			},
-		})
+		result.ToolCalls = append(result.ToolCalls, o.toToolCall(tc))
 	}
 
 	// Ollama 非流式响应可能包含 prompt_eval_count / eval_count。
@@ -213,10 +208,33 @@ func (o *Ollama) parseResponse(apiResp *ollamaChatResponse) (*model.ChatResponse
 	return result, nil
 }
 
+// toToolCall 将 Ollama 工具调用转换为统一模型，并为 Ollama 生成合成 ID
+//（Ollama API 不提供工具调用 ID，但 Marcus 内部需要 ID 关联结果）。
+func (o *Ollama) toToolCall(tc ollamaToolCall) model.ToolCall {
+	args, _ := json.Marshal(tc.Function.Arguments)
+	return model.ToolCall{
+		ID:   uuid.New().String(),
+		Type: "function",
+		Function: model.ToolCallFunction{
+			Name:      tc.Function.Name,
+			Arguments: string(args),
+		},
+	}
+}
+
 // streamResponse 解析 Ollama 流式响应（每行一个 JSON）。
-func (o *Ollama) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChunk) {
+func (o *Ollama) streamResponse(ctx context.Context, body io.ReadCloser, ch chan<- *model.ChatChunk) {
 	defer close(ch)
 	defer body.Close()
+
+	send := func(chunk *model.ChatChunk) bool {
+		select {
+		case ch <- chunk:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -229,7 +247,7 @@ func (o *Ollama) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChunk) 
 
 		var chunk ollamaChatResponse
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			ch <- &model.ChatChunk{Error: fmt.Errorf("decode stream chunk: %w", err), Done: true}
+			send(&model.ChatChunk{Error: fmt.Errorf("decode stream chunk: %w", err), Done: true})
 			return
 		}
 
@@ -237,28 +255,23 @@ func (o *Ollama) streamResponse(body io.ReadCloser, ch chan<- *model.ChatChunk) 
 		item.Content = chunk.Message.Content
 
 		for _, tc := range chunk.Message.ToolCalls {
-			args, _ := json.Marshal(tc.Function.Arguments)
-			item.ToolCalls = append(item.ToolCalls, model.ToolCall{
-				Type: "function",
-				Function: model.ToolCallFunction{
-					Name:      tc.Function.Name,
-					Arguments: string(args),
-				},
-			})
+			item.ToolCalls = append(item.ToolCalls, o.toToolCall(tc))
 		}
 
-		ch <- item
+		if !send(item) {
+			return
+		}
 		if chunk.Done {
 			return
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		ch <- &model.ChatChunk{Error: fmt.Errorf("read stream: %w", err), Done: true}
+		send(&model.ChatChunk{Error: fmt.Errorf("read stream: %w", err), Done: true})
 		return
 	}
 
-	ch <- &model.ChatChunk{Done: true}
+	send(&model.ChatChunk{Done: true})
 }
 
 // readError 读取非 200 响应的错误信息。

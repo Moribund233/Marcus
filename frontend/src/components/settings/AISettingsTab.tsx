@@ -1,22 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { useI18n } from '@/hooks/useI18n'
-import { llm } from '../../../wailsjs/go/models'
+import { llm, model } from '../../../wailsjs/go/models'
 import {
   GetLLMConfig,
   SaveLLMConfig,
   TestLLMConnection,
   GetLLMModels,
+  GetSupportedProviders,
 } from '../../../wailsjs/go/main/App'
 import { Loader2, TestTube2, Save, CheckCircle2, AlertCircle } from 'lucide-react'
-
-type Provider = 'openai' | 'anthropic' | 'ollama'
-
-const PROVIDERS: { id: Provider; label: string }[] = [
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'ollama', label: 'Ollama' },
-]
 
 /**
  * AI 设置标签页。
@@ -31,6 +24,7 @@ export function AISettingsTab() {
     model: '',
     base_url: '',
   })
+  const [providers, setProviders] = useState<model.ProviderInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -40,8 +34,11 @@ export function AISettingsTab() {
 
   useEffect(() => {
     setLoading(true)
-    GetLLMConfig()
-      .then((cfg) => {
+    Promise.all([GetLLMConfig(), GetSupportedProviders()])
+      .then(([cfg, providerList]) => {
+        if (providerList) {
+          setProviders(providerList)
+        }
         if (cfg) {
           setConfig({
             provider: cfg.provider || 'openai',
@@ -51,7 +48,7 @@ export function AISettingsTab() {
           })
         }
       })
-      .catch((err) => console.error('GetLLMConfig failed', err))
+      .catch((err) => console.error('load config failed', err))
       .finally(() => setLoading(false))
   }, [])
 
@@ -64,12 +61,18 @@ export function AISettingsTab() {
   )
 
   const handleProviderChange = useCallback(
-    (provider: Provider) => {
-      setConfig((prev) => ({ ...prev, provider, model: '', base_url: '' }))
+    (provider: string) => {
+      const p = providers.find((x) => x.provider === provider)
+      setConfig((prev) => ({
+        ...prev,
+        provider,
+        model: p?.default_model || '',
+        base_url: p?.default_base_url || '',
+      }))
       setModels([])
       setStatus(null)
     },
-    [],
+    [providers],
   )
 
   const handleSave = useCallback(async () => {
@@ -130,34 +133,36 @@ export function AISettingsTab() {
       <div className="space-y-5">
         <div className="space-y-2">
           <label className="text-sm font-medium">{t('aiSettings.provider')}</label>
-          <div className="flex gap-2">
-            {PROVIDERS.map((p) => (
+          <div className="flex flex-wrap gap-2">
+            {providers.map((p) => (
               <button
-                key={p.id}
-                onClick={() => handleProviderChange(p.id)}
+                key={p.provider}
+                onClick={() => handleProviderChange(p.provider)}
                 className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
-                  config.provider === p.id
+                  config.provider === p.provider
                     ? 'border-primary bg-primary/10 text-primary'
                     : 'border-input bg-background hover:bg-accent'
                 }`}
               >
-                {p.label}
+                {p.name}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-sm font-medium">{t('aiSettings.apiKey')}</label>
-          <input
-            type="password"
-            value={config.api_key}
-            onChange={(e) => handleChange('api_key', e.target.value)}
-            placeholder={t('aiSettings.apiKeyPlaceholder')}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          />
-          <p className="text-xs text-muted-foreground">{t('aiSettings.apiKeyDesc')}</p>
-        </div>
+        {providers.find((p) => p.provider === config.provider)?.need_api_key !== false && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium">{t('aiSettings.apiKey')}</label>
+            <input
+              type="password"
+              value={config.api_key}
+              onChange={(e) => handleChange('api_key', e.target.value)}
+              placeholder={t('aiSettings.apiKeyPlaceholder')}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            />
+            <p className="text-xs text-muted-foreground">{t('aiSettings.apiKeyDesc')}</p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">

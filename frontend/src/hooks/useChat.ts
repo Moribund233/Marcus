@@ -175,12 +175,14 @@ export function useChat() {
       }
     })
     const unsubEnd = EventsOn('chat:stream:end', (data: { conversation_id: string }) => {
+      if (data.conversation_id !== streamingIdRef.current) return
       setIsStreaming(false)
       setStreamingContent('')
       streamingIdRef.current = null
       fetchMessages(data.conversation_id)
     })
     const unsubError = EventsOn('chat:stream:error', (data: { conversation_id: string; error: string }) => {
+      if (data.conversation_id !== streamingIdRef.current) return
       setIsStreaming(false)
       setStreamingContent('')
       streamingIdRef.current = null

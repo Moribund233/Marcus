@@ -19,8 +19,8 @@ func NewPromptManager(registry *Registry) *PromptManager {
 	return &PromptManager{registry: registry}
 }
 
-// BuildSystemPrompt 构建完整的系统提示词，包含记忆快照和可用工具说明。
-func (pm *PromptManager) BuildSystemPrompt(memoryPrompt string) string {
+// BuildSystemPrompt 构建完整的系统提示词，包含记忆快照、技能提示和可用工具说明。
+func (pm *PromptManager) BuildSystemPrompt(memoryPrompt, skillsPrompt string) string {
 	var b strings.Builder
 
 	b.WriteString("You are Marcus, an intelligent agent that helps users by selecting and executing tools from the Marcus toolbox.\n")
@@ -29,10 +29,16 @@ func (pm *PromptManager) BuildSystemPrompt(memoryPrompt string) string {
 	b.WriteString("2. When you need a tool, respond with a tool call using the provided function schema.\n")
 	b.WriteString("3. After each tool result, decide if you need another tool or if you can provide the final answer.\n")
 	b.WriteString("4. Keep your final response concise and helpful.\n")
-	b.WriteString("5. You can manage long-term memory using the 'memory' tool to remember user preferences or environment facts.\n\n")
+	b.WriteString("5. You can manage long-term memory using the 'memory' tool to remember user preferences or environment facts.\n")
+	b.WriteString("6. Below are relevant workflows (SKILLS) that match the current request. Consider them as reference patterns.\n\n")
 
 	if memoryPrompt != "" {
 		b.WriteString(memoryPrompt)
+		b.WriteString("\n\n")
+	}
+
+	if skillsPrompt != "" {
+		b.WriteString(skillsPrompt)
 		b.WriteString("\n\n")
 	}
 
