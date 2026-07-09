@@ -3,7 +3,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"Marcus/internal/conversation"
 	"Marcus/internal/llm"
@@ -176,6 +178,98 @@ func (a *Agent) buildSystemPrompt(userMessage string) (string, error) {
 	}
 
 	return a.promptMgr.BuildSystemPrompt(memoryPrompt, skillsPrompt), nil
+}
+
+// ConsolidateMemory 对已完成对话进行归纳：调用 LLM 提取关键事实并写入 L2 长期记忆。
+// 仅在对话有足够内容且 memoryStore 可用时执行；失败不影响主流程。
+func (a *Agent) ConsolidateMemory(ctx context.Context, conversationID string) {
+	if a.memoryStore == nil || a.llm == nil {
+		return
+	}
+
+	msgs, err := a.convStore.GetMessages(conversationID)
+	if err != nil || len(msgs) < 4 {
+		return
+	}
+
+	var b strings.Builder
+	for _, msg := range msgs {
+		switch msg.Role {
+		case model.RoleUser:
+			if msg.Content != "" {
+				b.WriteString("User: ")
+				b.WriteString(msg.Content)
+				b.WriteString("\n")
+			}
+		case model.RoleAssistant:
+			if msg.Content != "" {
+				b.WriteString("Assistant: ")
+				b.WriteString(msg.Content)
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	conversationText := b.String()
+	if len(conversationText) < 20 {
+		return
+	}
+	if len(conversationText) > 6000 {
+		conversationText = conversationText[len(conversationText)-6000:]
+	}
+
+	prompt := fmt.Sprintf(`Extract key facts from the conversation below. Only extract stable, factual information about the user (preferences, environment, project details). Skip greetings, thanks, and transient chit-chat.
+
+Return a JSON array of objects, each with "key" (short kebab-case identifier) and "content" (brief factual statement). Example:
+[{"key":"preferred-language","content":"User prefers Chinese responses"}]
+
+If no facts to extract, return an empty array [].
+
+Conversation:
+%s
+
+JSON facts:`, conversationText)
+
+	resp, err := a.llm.Chat(ctx, &model.ChatRequest{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "You are a precise fact extraction assistant. Return only valid JSON."},
+			{Role: model.RoleUser, Content: prompt},
+		},
+	})
+	if err != nil {
+		return
+	}
+
+	raw := resp.Content
+	raw = strings.TrimSpace(raw)
+	if idx := strings.Index(raw, "["); idx >= 0 {
+		raw = raw[idx:]
+	}
+	if idx := strings.LastIndex(raw, "]"); idx >= 0 {
+		raw = raw[:idx+1]
+	}
+
+	var facts []struct {
+		Key     string `json:"key"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(raw), &facts); err != nil || len(facts) == 0 {
+		return
+	}
+
+	for _, f := range facts {
+		f.Key = strings.TrimSpace(f.Key)
+		f.Content = strings.TrimSpace(f.Content)
+		if f.Key == "" || f.Content == "" {
+			continue
+		}
+		_, _ = a.memoryStore.Add(model.MemoryEntry{
+			Scope:   model.MemoryScopeUser,
+			Key:     f.Key,
+			Content: f.Content,
+			Source:  "consolidation",
+		})
+	}
 }
 
 // buildMessageHistory 从对话存储加载历史并组装为 LLM 消息列表。

@@ -182,3 +182,24 @@ func TestMemoryToolCall(t *testing.T) {
 		t.Fatalf("content = %q", entry.Content)
 	}
 }
+
+func TestSuggestedLimit(t *testing.T) {
+	tests := []struct {
+		input    int
+		expected int
+	}{
+		{0, DefaultMemoryLimit},
+		{-1, DefaultMemoryLimit},
+		{2000, 2000},
+		{8000, 3200},
+		{128000, 32000},
+		{200000, 32000},
+		{1000000, 32000},
+	}
+	for _, tc := range tests {
+		got := SuggestedLimit(tc.input)
+		if got != tc.expected {
+			t.Errorf("SuggestedLimit(%d) = %d, want %d", tc.input, got, tc.expected)
+		}
+	}
+}

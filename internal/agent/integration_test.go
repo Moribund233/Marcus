@@ -292,3 +292,72 @@ func TestBuildMessageHistory_Compression(t *testing.T) {
 		t.Errorf("expected history to be compressed, got %d messages", len(history))
 	}
 }
+
+// TestConsolidateMemory 验证 Agent 能将对话内容归纳为 L2 记忆。
+func TestConsolidateMemory(t *testing.T) {
+	factJSON := `[{"key":"preferred-framework","content":"User prefers Gin framework"}]`
+	responses := []*model.ChatResponse{
+		{Content: factJSON, Usage: model.Usage{TotalTokens: 15}},
+	}
+	ag, db := newTestAgent(t, responses)
+	defer db.Close()
+
+	conv, err := ag.convStore.CreateConversation("Consolidation Test")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	if _, err := ag.convStore.AddMessage(conv.ID, model.RoleUser, "hi, I use Gin for my Go projects"); err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+	if _, err := ag.convStore.AddAssistantMessage(conv.ID, "Great choice! Gin is fast.", nil); err != nil {
+		t.Fatalf("add assistant message: %v", err)
+	}
+	if _, err := ag.convStore.AddMessage(conv.ID, model.RoleUser, "and I prefer PostgreSQL"); err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+	if _, err := ag.convStore.AddAssistantMessage(conv.ID, "PostgreSQL is solid.", nil); err != nil {
+		t.Fatalf("add assistant message: %v", err)
+	}
+
+	ag.ConsolidateMemory(context.Background(), conv.ID)
+
+	entry, err := ag.memoryStore.GetByKey("preferred-framework")
+	if err != nil {
+		t.Fatalf("get memory: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("expected consolidated memory to exist")
+	}
+	if !strings.Contains(entry.Content, "Gin") {
+		t.Errorf("memory content = %q, want it to mention Gin", entry.Content)
+	}
+}
+
+// TestConsolidateMemory_SkipsShortConversation 验证短对话不会触发归纳。
+func TestConsolidateMemory_SkipsShortConversation(t *testing.T) {
+	ag, db := newTestAgent(t, nil)
+	defer db.Close()
+
+	conv, err := ag.convStore.CreateConversation("Short Test")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	// 只有一条消息，不应触发归纳
+	if _, err := ag.convStore.AddMessage(conv.ID, model.RoleUser, "hi"); err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+
+	ag.ConsolidateMemory(context.Background(), conv.ID)
+
+	stats, err := ag.memoryStore.Stats("")
+	if err != nil {
+		t.Fatalf("memory stats: %v", err)
+	}
+	if stats.TotalChars != 0 {
+		t.Errorf("expected empty memory, got %d chars", stats.TotalChars)
+	}
+}
+
+

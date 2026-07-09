@@ -18,8 +18,25 @@ import (
 )
 
 // DefaultMemoryLimit 是长期记忆注入系统 Prompt 的默认字符上限。
-// 参考 Hermes Agent 的 MEMORY.md 限制。
-const DefaultMemoryLimit = 2200
+const DefaultMemoryLimit = 8000
+
+// SuggestedLimit 根据模型上下文 token 数计算建议的记忆字符上限。
+// contextTokens 为模型最大上下文长度；若 <= 0 则返回 DefaultMemoryLimit。
+// 规则：取 10% 上下文窗口，限制在 [2000, 32000] 范围。
+func SuggestedLimit(contextTokens int) int {
+	if contextTokens <= 0 {
+		return DefaultMemoryLimit
+	}
+	limit := contextTokens * 4 / 10 // 近似：1 token ≈ 4 chars, 取 10%
+	switch {
+	case limit < 2000:
+		return 2000
+	case limit > 32000:
+		return 32000
+	default:
+		return limit
+	}
+}
 
 // Store 提供长期记忆的持久化能力。
 type Store struct {

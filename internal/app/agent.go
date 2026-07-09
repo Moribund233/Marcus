@@ -39,10 +39,6 @@ func (a *App) initAgent() error {
 	}
 
 	convStore := conversation.NewStore(a.db)
-	memStore := memory.NewStore(a.db, memory.DefaultMemoryLimit)
-	skStore := skill.NewStore(a.db)
-
-	// LLM Provider 配置
 	llmCfg, err := a.loadLLMConfig()
 	if err != nil {
 		return fmt.Errorf("load llm config: %w", err)
@@ -56,7 +52,6 @@ func (a *App) initAgent() error {
 		}
 	}
 
-	// 如果未配置或初始化失败，默认使用 OpenAI 占位（无 API Key），等待用户配置。
 	if provider == nil {
 		provider = llm.NewOpenAI(llm.Config{
 			Provider: model.LLMProviderOpenAI,
@@ -64,13 +59,17 @@ func (a *App) initAgent() error {
 		})
 	}
 
+	contextTokens := getModelContext(provider, llmCfg.Model)
+	memStore := memory.NewStore(a.db, memory.SuggestedLimit(contextTokens))
+	skStore := skill.NewStore(a.db)
+
 	agentCfg := agent.Config{
 		LLM:              provider,
 		Runner:           a.sandbox,
 		ConvStore:        convStore,
 		MemoryStore:      memStore,
 		SkillStore:       skStore,
-		MaxContextTokens: getModelContext(provider, llmCfg.Model),
+		MaxContextTokens: contextTokens,
 	}
 	ag := agent.NewAgent(agentCfg)
 	a.registerTools(ag)
@@ -186,18 +185,21 @@ func (a *App) refreshAgentProvider() error {
 		return err
 	}
 	skStore := skill.NewStore(a.db)
+	contextTokens := getModelContext(provider, llmCfg.Model)
+	memStore := memory.NewStore(a.db, memory.SuggestedLimit(contextTokens))
 	ag := agent.NewAgent(agent.Config{
 		LLM:              provider,
 		Runner:           a.sandbox,
 		ConvStore:        a.convStore,
-		MemoryStore:      a.memStore,
+		MemoryStore:      memStore,
 		SkillStore:       skStore,
-		MaxContextTokens: getModelContext(provider, llmCfg.Model),
+		MaxContextTokens: contextTokens,
 	})
 	a.registerTools(ag)
 
 	a.agentMu.Lock()
 	a.agent = ag
+	a.memStore = memStore
 	a.agentMu.Unlock()
 	return nil
 }
@@ -249,7 +251,11 @@ func (a *App) SendMessage(conversationID string, userMessage string) (*model.Cha
 	if llmCfg == nil || llmCfg.APIKey == "" {
 		return nil, fmt.Errorf("llm not configured")
 	}
-	return ag.Run(context.Background(), conversationID, userMessage)
+	resp, err := ag.Run(context.Background(), conversationID, userMessage)
+	if err == nil {
+		ag.ConsolidateMemory(context.Background(), conversationID)
+	}
+	return resp, err
 }
 
 // SendMessageStream 以流式方式向 Agent 发送用户消息。
@@ -284,6 +290,8 @@ func (a *App) SendMessageStream(conversationID string, userMessage string) error
 			})
 			return
 		}
+
+		ag.ConsolidateMemory(context.Background(), conversationID)
 
 		// 将最终内容以打字机效果分片推送。
 		content := resp.Content
