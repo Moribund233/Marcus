@@ -154,8 +154,12 @@ func (o *Ollama) buildRequestBody(req *model.ChatRequest, stream bool) ([]byte, 
 		})
 	}
 
+	model := req.Model
+	if model == "" {
+		model = o.cfg.Model
+	}
 	body := ollamaChatRequest{
-		Model:    req.Model,
+		Model:    model,
 		Messages: messages,
 		Stream:   stream,
 		Options:  map[string]interface{}{},

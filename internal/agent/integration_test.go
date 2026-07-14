@@ -252,15 +252,18 @@ func TestBuildMessageHistory_ToolCallID(t *testing.T) {
 	}
 }
 
-// TestBuildSystemPrompt_IncludesSchema 验证系统提示词中包含工具参数 Schema。
-func TestBuildSystemPrompt_IncludesSchema(t *testing.T) {
+// TestBuildSystemPrompt_EmptyToolbox 验证系统提示词中不显示系统工具，且工具箱为空时有提示。
+func TestBuildSystemPrompt_EmptyToolbox(t *testing.T) {
 	registry := NewRegistry()
 	registry.RegisterMemoryTool()
 	pm := NewPromptManager(registry)
 
 	prompt := pm.BuildSystemPrompt("", "")
-	if !strings.Contains(prompt, "Parameters schema") {
-		t.Errorf("expected system prompt to contain 'Parameters schema', got:\n%s", prompt)
+	if strings.Contains(prompt, "memory") {
+		t.Errorf("system prompt should NOT mention system tool 'memory', got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "toolbox is currently empty") {
+		t.Errorf("expected prompt to mention empty toolbox, got:\n%s", prompt)
 	}
 }
 

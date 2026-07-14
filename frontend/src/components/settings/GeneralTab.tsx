@@ -1,4 +1,4 @@
-import { Sun, Languages, Scan, LogOut, Moon, Palette } from 'lucide-react'
+import { Sun, Languages, Scan, LogOut, Moon, Palette, MessageSquare } from 'lucide-react'
 import { useConfig } from '@/hooks/useConfig'
 import { useI18n } from '@/hooks/useI18n'
 
@@ -10,15 +10,15 @@ function TabSwitch({ options, value, onChange }: { options: { label: string; val
       <div
         className="absolute top-0.5 bottom-0.5 rounded-md bg-accent transition-all duration-200"
         style={{
-          left: `calc(${activeIndex} / ${options.length} * 100% + 2px)`,
-          width: `calc(100% / ${options.length} - 4px)`,
+          left: `calc(4px + ${activeIndex} * (100% - 4px) / ${options.length})`,
+          width: `calc((100% - 4px) / ${options.length} - 4px)`,
         }}
       />
-      {options.map((opt, i) => (
+      {options.map((opt) => (
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
-          className={`relative z-10 whitespace-nowrap rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${value === opt.value ? 'text-accent-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          className={`relative z-10 flex-1 whitespace-nowrap rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${value === opt.value ? 'text-accent-foreground' : 'text-muted-foreground hover:text-foreground'}`}
         >
           {opt.label}
         </button>
@@ -34,6 +34,7 @@ export function GeneralTab() {
   const terminateOnExit = config?.terminate_on_exit ?? true
   const theme = config?.theme ?? 'dark'
   const lang = config?.language ?? 'zh-CN'
+  const llmLang = config?.llm_language || 'auto'
 
   const setTheme = (next: string) => {
     save({ theme: next })
@@ -82,6 +83,25 @@ export function GeneralTab() {
             ]}
             value={lang}
             onChange={(v) => { save({ language: v }); setLocale(v) }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            <div>
+              <div className="text-sm">{t('general.llmLanguage')}</div>
+              <div className="text-xs text-muted-foreground">{t('general.llmLanguageDesc')}</div>
+            </div>
+          </div>
+          <TabSwitch
+            options={[
+              { label: t('general.llmLangAuto'), value: 'auto' },
+              { label: t('general.llmLangZh'), value: 'zh-CN' },
+              { label: t('general.llmLangEn'), value: 'en-US' },
+            ]}
+            value={llmLang}
+            onChange={(v) => save({ llm_language: v })}
           />
         </div>
 

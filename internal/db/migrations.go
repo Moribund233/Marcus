@@ -235,5 +235,22 @@ func All() []Migration {
 				return err
 			},
 		},
+		{
+			ID:   "20240713_provider_models",
+			Desc: "Create provider_models table for API-fetched model caching",
+			Up: func(tx *sql.Tx) error {
+				_, err := tx.Exec(`
+					CREATE TABLE IF NOT EXISTS provider_models (
+						provider       TEXT NOT NULL,
+						model_id       TEXT NOT NULL,
+						model_name     TEXT NOT NULL,
+						context_length INTEGER NOT NULL DEFAULT 128000,
+						updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+						PRIMARY KEY (provider, model_id)
+					)
+				`)
+				return err
+			},
+		},
 	}
 }

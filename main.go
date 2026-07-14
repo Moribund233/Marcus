@@ -163,8 +163,24 @@ func (a *App) SendMessageStream(conversationID string, userMessage string) error
 	return a.impl.SendMessageStream(conversationID, userMessage)
 }
 
+func (a *App) EditMessage(messageID string, content string) error {
+	return a.impl.EditMessage(messageID, content)
+}
+
+func (a *App) DeleteMessage(messageID string) error {
+	return a.impl.DeleteMessage(messageID)
+}
+
+func (a *App) RecallMessages(messageID string) error {
+	return a.impl.RecallMessages(messageID)
+}
+
 func (a *App) GetLLMConfig() (*llm.Config, error) {
 	return a.impl.GetLLMConfig()
+}
+
+func (a *App) GetProviderConfig(provider string) (*llm.Config, error) {
+	return a.impl.GetProviderConfig(provider)
 }
 
 func (a *App) SaveLLMConfig(cfg llm.Config) error {
@@ -177,6 +193,10 @@ func (a *App) TestLLMConnection() error {
 
 func (a *App) GetLLMModels() ([]model.Model, error) {
 	return a.impl.GetLLMModels()
+}
+
+func (a *App) RefreshLLMModels() ([]model.Model, error) {
+	return a.impl.RefreshLLMModels()
 }
 
 func (a *App) GetSupportedProviders() []model.ProviderInfo {

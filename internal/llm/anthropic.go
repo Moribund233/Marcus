@@ -40,7 +40,19 @@ func (a *Anthropic) Name() string {
 }
 
 // Models 返回 Anthropic 支持的常见模型列表。
+//
+// 优先级链：
+//  1. 数据库缓存（由用户手动触发刷新）
+//  2. 静态硬编码列表
 func (a *Anthropic) Models() []model.Model {
+	// Level 1: 数据库缓存
+	if store := GetModelStore(); store != nil {
+		if cached, err := store.GetModels(a.cfg.Provider); err == nil && len(cached) > 0 {
+			return cached
+		}
+	}
+
+	// Level 2: 静态列表
 	return []model.Model{
 		{ID: "claude-3-5-sonnet-latest", Name: "Claude 3.5 Sonnet", Context: 200000},
 		{ID: "claude-3-opus-latest", Name: "Claude 3 Opus", Context: 200000},
@@ -187,8 +199,12 @@ func (a *Anthropic) buildRequestBody(req *model.ChatRequest, stream bool) ([]byt
 		})
 	}
 
+	model := req.Model
+	if model == "" {
+		model = a.cfg.Model
+	}
 	body := anthropicRequest{
-		Model:     req.Model,
+		Model:     model,
 		Messages:  messages,
 		MaxTokens: defaultIfZero(req.MaxTokens, 4096),
 		Stream:    stream,

@@ -55,14 +55,16 @@ func init() {
 		},
 	})
 	defaultRegistry.Register(model.LLMProviderDeepSeek, &ProviderEntry{
-		Adapter:      AdapterOpenAICompat,
-		Name:         "DeepSeek",
-		DefaultModel: "deepseek-chat",
-		DefaultBaseURL: "https://api.deepseek.com/v1",
-		NeedAPIKey:   true,
+		Adapter:        AdapterOpenAICompat,
+		Name:           "DeepSeek",
+		DefaultModel:   "deepseek-v4-flash",
+		DefaultBaseURL: "https://api.deepseek.com",
+		NeedAPIKey:     true,
 		Models: []model.Model{
-			{ID: "deepseek-chat", Name: "DeepSeek Chat", Context: 128000},
-			{ID: "deepseek-reasoner", Name: "DeepSeek Reasoner", Context: 128000},
+			{ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", Context: 1000000},
+			{ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", Context: 1000000},
+			{ID: "deepseek-chat", Name: "DeepSeek Chat (legacy)", Context: 128000},
+			{ID: "deepseek-reasoner", Name: "DeepSeek Reasoner (legacy)", Context: 128000},
 		},
 	})
 	defaultRegistry.Register(model.LLMProviderGroq, &ProviderEntry{

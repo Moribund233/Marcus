@@ -197,6 +197,58 @@ func (s *Store) GetMessages(conversationID string) ([]model.ConversationMessage,
 	return scanMessages(rows)
 }
 
+// UpdateMessage 更新指定消息的内容。
+func (s *Store) UpdateMessage(id, content string) error {
+	_, err := s.db.Exec(`UPDATE messages SET content = ? WHERE id = ?`, content, id)
+	if err != nil {
+		return fmt.Errorf("update message: %w", err)
+	}
+	return nil
+}
+
+// DeleteMessage 删除单条消息。
+func (s *Store) DeleteMessage(id string) error {
+	_, err := s.db.Exec(`DELETE FROM messages WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete message: %w", err)
+	}
+	return nil
+}
+
+// RecallMessages 删除指定消息及其之后的所有消息（按时间顺序）。
+// 用于撤回操作：从 LLM 上下文中移除该消息及其后续回复。
+func (s *Store) RecallMessages(fromID string) error {
+	msg, err := s.getMessageByID(fromID)
+	if err != nil {
+		return fmt.Errorf("get message for recall: %w", err)
+	}
+	if msg == nil {
+		return fmt.Errorf("message %s not found", fromID)
+	}
+	_, err = s.db.Exec(
+		`DELETE FROM messages WHERE conversation_id = ? AND created_at >= ?`,
+		msg.ConversationID, msg.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("recall messages: %w", err)
+	}
+	return nil
+}
+
+// getMessageByID 按 ID 获取单条消息（含 conversation_id 和 created_at）。
+func (s *Store) getMessageByID(id string) (*model.ConversationMessage, error) {
+	row := s.db.QueryRow(
+		`SELECT id, conversation_id, created_at FROM messages WHERE id = ?`, id)
+	var msg model.ConversationMessage
+	if err := row.Scan(&msg.ID, &msg.ConversationID, &msg.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get message by id: %w", err)
+	}
+	return &msg, nil
+}
+
 // touchConversation 更新对话的 updated_at。
 func (s *Store) touchConversation(id string) {
 	_, _ = s.db.Exec(`UPDATE conversations SET updated_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339), id)

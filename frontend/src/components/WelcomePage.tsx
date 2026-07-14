@@ -1,18 +1,25 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useI18n } from '@/hooks/useI18n'
-import { GetRecentTools, ListConversations } from '../../wailsjs/go/main/App'
+import { GetRecentTools } from '../../wailsjs/go/main/App'
 import { model } from '../../wailsjs/go/models'
-import { MessageSquare, Clock, Sparkles } from 'lucide-react'
+import { History, Clock, MessageSquare,Sparkles, Trash2 } from 'lucide-react'
 
 interface WelcomePageProps {
+  conversations: model.Conversation[]
   onSelectConversation: (id: string) => void
   onSelectTool: (tool: model.ToolInfo) => void
   onNewConversation: () => void
+  onDeleteConversation: (id: string) => void
 }
 
-export function WelcomePage({ onSelectConversation, onSelectTool, onNewConversation }: WelcomePageProps) {
+export function WelcomePage({
+  conversations,
+  onSelectConversation,
+  onSelectTool,
+  onNewConversation,
+  onDeleteConversation,
+}: WelcomePageProps) {
   const { t } = useI18n()
-  const [conversations, setConversations] = useState<model.Conversation[]>([])
   const [recentTools, setRecentTools] = useState<model.ToolInfo[]>([])
 
   const hour = new Date().getHours()
@@ -26,13 +33,17 @@ export function WelcomePage({ onSelectConversation, onSelectTool, onNewConversat
   }
 
   useEffect(() => {
-    ListConversations(5).then((list) => setConversations(list ?? [])).catch(() => {})
     GetRecentTools(5).then((list) => setRecentTools(list ?? [])).catch(() => {})
   }, [])
 
+  const handleDelete = useCallback((e: React.MouseEvent, id: string) => {
+    e.stopPropagation()
+    onDeleteConversation(id)
+  }, [onDeleteConversation])
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-8">
-      <div className="flex max-w-lg flex-col items-center gap-8">
+      <div className="flex max-w-lg flex-col items-center gap-8 w-full">
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="rounded-full bg-primary/10 p-4">
             <Sparkles className="h-8 w-8 text-primary" />
@@ -44,19 +55,26 @@ export function WelcomePage({ onSelectConversation, onSelectTool, onNewConversat
         {conversations.length > 0 && (
           <div className="w-full">
             <h2 className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <MessageSquare className="h-3.5 w-3.5" />
+              <History className="h-3.5 w-3.5" />
               {t('welcome.recentConversations')}
             </h2>
             <div className="flex flex-col gap-1">
               {conversations.map((conv) => (
-                <button
+                <div
                   key={conv.id}
-                  className="flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+                  className="group flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent cursor-pointer"
                   onClick={() => onSelectConversation(conv.id)}
                 >
                   <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{conv.title}</span>
-                </button>
+                  <span className="flex-1 truncate">{conv.title}</span>
+                  <button
+                    onClick={(e) => handleDelete(e, conv.id)}
+                    className="shrink-0 rounded p-1 text-muted-foreground/40 opacity-0 transition-all hover:text-destructive group-hover:opacity-100"
+                    title={t('sidebar.conversations.delete')}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -67,7 +85,7 @@ export function WelcomePage({ onSelectConversation, onSelectTool, onNewConversat
             className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent"
             onClick={onNewConversation}
           >
-            <MessageSquare className="h-4 w-4" />
+            <Sparkles className="h-4 w-4" />
             {t('sidebar.conversations.new')}
           </button>
         )}

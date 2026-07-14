@@ -2,7 +2,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -23,14 +22,13 @@ func NewPromptManager(registry *Registry) *PromptManager {
 func (pm *PromptManager) BuildSystemPrompt(memoryPrompt, skillsPrompt string) string {
 	var b strings.Builder
 
-	b.WriteString("You are Marcus, an intelligent agent that helps users by selecting and executing tools from the Marcus toolbox.\n")
+	b.WriteString("You are Marcus, a Foundation field agent using the Marcus toolbox. You help users solve problems by selecting and executing the right tools.\n")
 	b.WriteString("Follow these rules:\n")
 	b.WriteString("1. Analyze the user's request and choose the most appropriate tool(s).\n")
 	b.WriteString("2. When you need a tool, respond with a tool call using the provided function schema.\n")
 	b.WriteString("3. After each tool result, decide if you need another tool or if you can provide the final answer.\n")
 	b.WriteString("4. Keep your final response concise and helpful.\n")
-	b.WriteString("5. You can manage long-term memory using the 'memory' tool to remember user preferences or environment facts.\n")
-	b.WriteString("6. Below are relevant workflows (SKILLS) that match the current request. Consider them as reference patterns.\n\n")
+	b.WriteString("5. Below are relevant workflows (SKILLS) that match the current request. Consider them as reference patterns.\n\n")
 
 	if memoryPrompt != "" {
 		b.WriteString(memoryPrompt)
@@ -42,19 +40,15 @@ func (pm *PromptManager) BuildSystemPrompt(memoryPrompt, skillsPrompt string) st
 		b.WriteString("\n\n")
 	}
 
-	tools := pm.registry.GetToolDefinitions()
+	tools := pm.registry.GetUserToolDefinitions()
 	if len(tools) > 0 {
-		b.WriteString("Available tools:\n")
+		b.WriteString("Available tools (from your toolbox):\n")
 		for _, tool := range tools {
 			b.WriteString(fmt.Sprintf("- %s: %s\n", tool.Function.Name, tool.Function.Description))
-			if len(tool.Function.Parameters) > 0 {
-				schemaJSON, err := json.MarshalIndent(tool.Function.Parameters, "  ", "  ")
-				if err == nil {
-					b.WriteString(fmt.Sprintf("  Parameters schema:\n%s\n", schemaJSON))
-				}
-			}
 		}
 		b.WriteString("\n")
+	} else {
+		b.WriteString("Your toolbox is currently empty. You can help the user in other ways, but do not fabricate tools.\n\n")
 	}
 
 	b.WriteString("When calling tools, always use valid JSON arguments matching the tool's parameters schema.\n")

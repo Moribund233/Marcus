@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { useI18n } from '@/hooks/useI18n'
 import { llm, model } from '../../../wailsjs/go/models'
 import {
   GetLLMConfig,
+  GetProviderConfig,
   SaveLLMConfig,
   TestLLMConnection,
   GetLLMModels,
+  RefreshLLMModels,
   GetSupportedProviders,
 } from '../../../wailsjs/go/main/App'
 import { Loader2, TestTube2, Save, CheckCircle2, AlertCircle } from 'lucide-react'
@@ -31,6 +33,7 @@ export function AISettingsTab() {
   const [modelsLoading, setModelsLoading] = useState(false)
   const [models, setModels] = useState<{ id: string; name: string }[]>([])
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const currentProviderRef = useRef('')
 
   useEffect(() => {
     setLoading(true)
@@ -46,6 +49,7 @@ export function AISettingsTab() {
             model: cfg.model || '',
             base_url: cfg.base_url || '',
           })
+          currentProviderRef.current = cfg.provider || 'openai'
         }
       })
       .catch((err) => console.error('load config failed', err))
@@ -54,23 +58,43 @@ export function AISettingsTab() {
 
   const handleChange = useCallback(
     (field: keyof llm.Config, value: string) => {
-      setConfig((prev) => ({ ...prev, [field]: value }))
+      setConfig((prev) => ({ ...prev, [field]: field === 'api_key' ? value.trim() : value }))
       setStatus(null)
     },
     [],
   )
 
   const handleProviderChange = useCallback(
-    (provider: string) => {
+    async (provider: string) => {
+      currentProviderRef.current = provider
       const p = providers.find((x) => x.provider === provider)
       setConfig((prev) => ({
         ...prev,
         provider,
+        api_key: '',
         model: p?.default_model || '',
         base_url: p?.default_base_url || '',
       }))
       setModels([])
       setStatus(null)
+
+      try {
+        const storedCfg = await GetProviderConfig(provider)
+        if (storedCfg && currentProviderRef.current === provider) {
+          setConfig((prev) =>
+            prev.provider === provider
+              ? {
+                  ...prev,
+                  api_key: storedCfg.api_key || '',
+                  model: storedCfg.model || prev.model,
+                  base_url: storedCfg.base_url || prev.base_url,
+                }
+              : prev,
+          )
+        }
+      } catch {
+        // No stored config for this provider
+      }
     },
     [providers],
   )
@@ -105,14 +129,15 @@ export function AISettingsTab() {
   const handleLoadModels = useCallback(async () => {
     setModelsLoading(true)
     try {
-      const list = await GetLLMModels()
+      await SaveLLMConfig(config)
+      const list = await RefreshLLMModels()
       setModels(list.map((m) => ({ id: m.id, name: m.name || m.id })))
     } catch (e) {
       setStatus({ type: 'error', message: String(e) })
     } finally {
       setModelsLoading(false)
     }
-  }, [])
+  }, [config])
 
   if (loading) {
     return (

@@ -27,6 +27,9 @@ func (a *App) InstallToolPackage(path string) error {
 		return err
 	}
 	_, err = a.registerLocalPackage(path)
+	if err == nil {
+		a.syncAgentTools()
+	}
 	return err
 }
 
@@ -90,6 +93,8 @@ func (a *App) runPackageInstall(path string) {
 		emitComplete(false, err.Error())
 		return
 	}
+
+	a.syncAgentTools()
 
 	emit("running", fmt.Sprintf(model.Localize(lang, "install.registered"), len(newTools)), 100)
 	emitComplete(true, "")

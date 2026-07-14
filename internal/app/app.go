@@ -97,6 +97,9 @@ func (a *App) Startup(ctx context.Context) {
 		return
 	}
 
+	modelStore := llm.NewModelStore(db)
+	llm.SetModelStore(modelStore)
+
 	reg := tools.NewRegistry(db)
 	a.tools = reg
 	a.logs = tools.NewLogStore(db)
@@ -147,6 +150,13 @@ func (a *App) Startup(ctx context.Context) {
 		a.writeLog("ERROR", "agent init: "+err.Error())
 		wailsRuntime.LogError(a.ctx, "agent init: "+err.Error())
 	}
+
+	// Initial tool discovery: scan runtimes (uv, bun, binary dir) for any
+	// already-installed tools, then register them with the agent.
+	if _, err := a.scanner.ScanAll(); err != nil {
+		a.writeLog("WARN", "initial tool scan: "+err.Error())
+	}
+	a.registerTools(a.agent)
 }
 
 func (a *App) Shutdown(ctx context.Context) {
@@ -194,13 +204,21 @@ func (a *App) GetToolState(toolID string) *model.ProcessState {
 }
 
 func (a *App) RefreshTools() ([]model.ToolInfo, error) {
-	return a.scanner.ScanAll()
+	tools, err := a.scanner.ScanAll()
+	if err != nil {
+		return tools, err
+	}
+	a.syncAgentTools()
+	return tools, nil
 }
 
 func (a *App) AddManualTool(name, command, argType string) (model.ToolInfo, error) {
 	t := tools.ParseManual(name, command, argType)
-	err := a.tools.UpsertTool(t)
-	return t, err
+	if err := a.tools.UpsertTool(t); err != nil {
+		return t, err
+	}
+	a.syncAgentTools()
+	return t, nil
 }
 
 func (a *App) DeleteTool(toolID string) error {
@@ -211,6 +229,7 @@ func (a *App) DeleteTool(toolID string) error {
 	a.db.Exec(
 		`DELETE FROM store_installed WHERE ? LIKE '%' || plugin_id`, toolID,
 	)
+	a.syncAgentTools()
 	return nil
 }
 
@@ -231,6 +250,7 @@ func (a *App) UninstallTool(toolID string) (*model.UninstallResult, error) {
 
 	if result.Success {
 		wailsRuntime.EventsEmit(a.ctx, "tool-uninstalled", toolID)
+		a.syncAgentTools()
 	}
 
 	return result, nil

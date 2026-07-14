@@ -24,6 +24,8 @@ type Config struct {
 	// LLM 默认配置（更详细的 provider 级配置保存在数据库 llm_config 表中）
 	DefaultLLMProvider string `json:"default_llm_provider"`
 	DefaultLLMModel    string `json:"default_llm_model"`
+	// LLMLanguage 指定 LLM 回复语言："auto"=跟随应用语言, "zh-CN"=中文, "en-US"=英文
+	LLMLanguage string `json:"llm_language"`
 }
 
 func Default() *Config {
@@ -43,6 +45,7 @@ func Default() *Config {
 		TerminateOnExit: true,
 		Theme:           "dark",
 		Language:        "zh-CN",
+		LLMLanguage:     "auto",
 		StoreIndexURL:   "https://raw.githubusercontent.com/Moribund233/Marcus-plugins/master/index.json",
 	}
 }

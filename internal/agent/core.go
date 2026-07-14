@@ -14,6 +14,22 @@ import (
 	"Marcus/internal/skill"
 )
 
+// PhaseType 表示 Agent 执行阶段类型。
+type PhaseType string
+
+const (
+	PhaseThinking  PhaseType = "thinking"
+	PhaseToolCall  PhaseType = "tool_call"
+	PhaseToolDone  PhaseType = "tool_done"
+	PhaseCode      PhaseType = "code"
+	PhaseFetch     PhaseType = "fetch"
+	PhaseText      PhaseType = "text"
+)
+
+// PhaseCallback 在 Agent 执行各阶段被调用，用于通知前端展示实时状态。
+// conversationID 为当前对话 ID，便于回调方发射 Wails 事件。
+type PhaseCallback func(conversationID string, phase PhaseType, content string, metadata map[string]string)
+
 // Agent 是 Marcus LLM Agent 的核心，负责运行 TAO（Thought-Action-Observation）循环。
 type Agent struct {
 	llm           llm.Provider
@@ -25,6 +41,8 @@ type Agent struct {
 	skillStore    *skill.Store
 	maxIterations int
 	compressor    *ContextCompressor
+	lang          string
+	onPhase       PhaseCallback
 }
 
 // Config 用于创建 Agent 实例。
@@ -36,6 +54,8 @@ type Config struct {
 	SkillStore       *skill.Store
 	MaxIterations    int
 	MaxContextTokens int
+	Language         string
+	OnPhase          PhaseCallback
 }
 
 // NewAgent 创建一个新的 Agent 实例。
@@ -62,6 +82,8 @@ func NewAgent(cfg Config) *Agent {
 		skillStore:    cfg.SkillStore,
 		maxIterations: cfg.MaxIterations,
 		compressor:    NewContextCompressor(maxTokens, 0.85),
+		lang:          cfg.Language,
+		onPhase:       cfg.OnPhase,
 	}
 }
 
@@ -103,10 +125,12 @@ func (a *Agent) Run(ctx context.Context, conversationID string, userMessage stri
 			return nil, fmt.Errorf("build message history: %w", err)
 		}
 
+		a.emitPhase(conversationID, PhaseThinking, "", nil)
+
 		resp, err := a.llm.Chat(ctx, &model.ChatRequest{
 			Model:    "", // Provider 使用配置中的默认模型
 			Messages: history,
-			Tools:    a.registry.GetToolDefinitions(),
+			Tools:    a.registry.GetUserToolDefinitions(),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("llm chat: %w", err)
@@ -123,7 +147,16 @@ func (a *Agent) Run(ctx context.Context, conversationID string, userMessage stri
 
 		results := make([]model.ToolCallResult, 0, len(resp.ToolCalls))
 		for _, tc := range resp.ToolCalls {
+			a.emitPhase(conversationID, PhaseToolCall, tc.Function.Arguments, map[string]string{
+				"tool_name": tc.Function.Name,
+			})
+
 			result := a.executor.Execute(ctx, tc)
+
+			a.emitPhase(conversationID, PhaseToolDone, result.Content, map[string]string{
+				"tool_name": tc.Function.Name,
+			})
+
 			results = append(results, result)
 		}
 
@@ -154,6 +187,18 @@ func (a *Agent) ensureConversation(id string) error {
 	return nil
 }
 
+// langDirective 返回 LLM 输出语言的指令。
+func (a *Agent) langDirective() string {
+	switch a.lang {
+	case "zh-CN":
+		return "\nIMPORTANT: Always reply in Chinese (简体中文).\n"
+	case "en-US":
+		return "\nIMPORTANT: Always reply in English.\n"
+	default: // "auto" or empty
+		return ""
+	}
+}
+
 // buildSystemPrompt 构建包含记忆快照和技能匹配的系统提示词。
 func (a *Agent) buildSystemPrompt(userMessage string) (string, error) {
 	var memoryPrompt string
@@ -177,7 +222,10 @@ func (a *Agent) buildSystemPrompt(userMessage string) (string, error) {
 		}
 	}
 
-	return a.promptMgr.BuildSystemPrompt(memoryPrompt, skillsPrompt), nil
+	prompt := a.promptMgr.BuildSystemPrompt(memoryPrompt, skillsPrompt)
+
+	prompt += a.langDirective()
+	return prompt, nil
 }
 
 // ConsolidateMemory 对已完成对话进行归纳：调用 LLM 提取关键事实并写入 L2 长期记忆。
@@ -314,4 +362,10 @@ func (a *Agent) buildMessageHistory(conversationID, systemPrompt string) ([]mode
 	}
 
 	return history, nil
+}
+
+func (a *Agent) emitPhase(conversationID string, phase PhaseType, content string, metadata map[string]string) {
+	if a.onPhase != nil {
+		a.onPhase(conversationID, phase, content, metadata)
+	}
 }

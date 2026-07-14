@@ -10,12 +10,14 @@ import {
 import { EventsOn } from '../../wailsjs/runtime'
 import { model } from '../../wailsjs/go/models'
 
-/**
- * Chat 状态钩子，封装会话与消息的增删改查，并支持流式消息推送。
- *
- * 该钩子负责与 Wails 后端进行会话（Conversation）和消息（Message）的交互，
- * 并在前端维护当前选中的会话、消息列表以及发送消息的加载状态。
- */
+export type StreamPhaseType = 'thinking' | 'tool_call' | 'tool_done' | 'code' | 'fetch' | 'text'
+
+export interface StreamPhase {
+  type: StreamPhaseType
+  content: string
+  metadata?: Record<string, string>
+}
+
 export function useChat() {
   const [conversations, setConversations] = useState<model.Conversation[]>([])
   const [loading, setLoading] = useState(false)
@@ -32,9 +34,29 @@ export function useChat() {
 
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
+  const [streamingPhase, setStreamingPhase] = useState<StreamPhase | null>(null)
   const streamingIdRef = useRef<string | null>(null)
 
-  /** 获取会话列表，默认按更新时间倒序排列。 */
+  // debounce buffer for streaming content
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const bufferRef = useRef('')
+  const DEBOUNCE_MS = 150
+
+  const flushBuffer = useCallback(() => {
+    if (bufferRef.current) {
+      setStreamingContent((prev) => prev + bufferRef.current)
+      bufferRef.current = ''
+    }
+  }, [])
+
+  const debouncedAppend = useCallback((chunk: string) => {
+    bufferRef.current += chunk
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+    }
+    debounceTimerRef.current = setTimeout(flushBuffer, DEBOUNCE_MS)
+  }, [flushBuffer])
+
   const fetchConversations = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -48,7 +70,6 @@ export function useChat() {
     }
   }, [])
 
-  /** 根据当前选中的会话 ID 拉取消息记录。返回消息列表。 */
   const fetchMessages = useCallback(async (conversationId: string): Promise<model.ConversationMessage[]> => {
     setMessagesLoading(true)
     try {
@@ -68,7 +89,6 @@ export function useChat() {
     }
   }, [])
 
-  /** 创建新会话并自动选中。若已有空会话则复用，不重复创建。 */
   const createConversation = useCallback(async (title?: string) => {
     if (emptyConversationId) {
       const existing = conversations.find((c) => c.id === emptyConversationId)
@@ -92,7 +112,6 @@ export function useChat() {
     }
   }, [emptyConversationId, conversations])
 
-  /** 删除指定会话，若删除的是当前选中会话则清空消息。 */
   const deleteConversation = useCallback(async (conversationId: string) => {
     try {
       await DeleteConversation(conversationId)
@@ -108,7 +127,6 @@ export function useChat() {
     }
   }, [selectedId])
 
-  /** 选中会话并加载其历史消息。若消息为空则标记为空会话。 */
   const selectConversation = useCallback(async (conversationId: string) => {
     setSelectedId(conversationId)
     const msgs = await fetchMessages(conversationId)
@@ -117,7 +135,6 @@ export function useChat() {
     }
   }, [fetchMessages])
 
-  /** 向当前会话发送用户消息并触发 Agent 处理（非流式）。 */
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
     if (sendingRef.current) return
     sendingRef.current = true
@@ -125,7 +142,6 @@ export function useChat() {
     setSendError(null)
     try {
       const response = await SendMessage(conversationId, content)
-      // 发送成功后刷新消息列表以包含用户消息和模型回复。
       await fetchMessages(conversationId)
       return response
     } catch (e) {
@@ -139,53 +155,92 @@ export function useChat() {
     }
   }, [fetchMessages])
 
-  /** 以流式方式发送用户消息。 */
   const sendMessageStream = useCallback(async (conversationId: string, content: string) => {
     if (sendingRef.current || isStreaming) return
     sendingRef.current = true
     setSending(true)
     setSendError(null)
+
+    // optimistically show user message immediately
+    const optimisticMsg: model.ConversationMessage = {
+      id: `temp-${Date.now()}`,
+      conversation_id: conversationId,
+      role: 'user' as const,
+      content,
+      created_at: new Date().toISOString(),
+    } as model.ConversationMessage
+    setMessages((prev) => [...prev, optimisticMsg])
+
     try {
-      // 先触发后端流式处理，后端会保存用户消息与最终助手消息。
       await SendMessageStream(conversationId, content)
-      // 立即刷新一次以显示用户消息。
-      await fetchMessages(conversationId)
+      // Stream start/end events handle the state transitions:
+      //   start → setIsStreaming(true), setSending(false)
+      //   end   → setIsStreaming(false), sendingRef.current = false
+      // Don't fetchMessages here — the stream end handler does it.
     } catch (e) {
       const msg = String(e)
       setSendError(msg)
+      setSending(false)
+      sendingRef.current = false
       console.error('send stream failed', e)
       throw e
-    } finally {
-      // 流式状态由事件控制结束；这里只释放发送锁。
-      sendingRef.current = false
-      setSending(false)
     }
-  }, [fetchMessages, isStreaming])
+  }, [isStreaming])
 
-  /** 订阅后端流式消息事件。 */
   useEffect(() => {
     const unsubStart = EventsOn('chat:stream:start', (data: { conversation_id: string }) => {
       streamingIdRef.current = data.conversation_id
       setIsStreaming(true)
+      setSending(false) // transition from "sending" to "streaming"
       setStreamingContent('')
+      setStreamingPhase(null)
+      bufferRef.current = ''
     })
+
     const unsubChunk = EventsOn('chat:stream:chunk', (data: { conversation_id: string; content: string }) => {
       if (data.conversation_id === streamingIdRef.current) {
-        setStreamingContent((prev) => prev + data.content)
+        debouncedAppend(data.content)
       }
     })
+
+    const unsubPhase = EventsOn('chat:stream:phase', (data: { conversation_id: string; type: string; content: string; tool_name?: string; url?: string; language?: string }) => {
+      if (data.conversation_id === streamingIdRef.current) {
+        const phase: StreamPhase = {
+          type: data.type as StreamPhaseType,
+          content: data.content,
+          metadata: {},
+        }
+        if (data.tool_name) phase.metadata!.tool_name = data.tool_name
+        if (data.url) phase.metadata!.url = data.url
+        if (data.language) phase.metadata!.language = data.language
+        setStreamingPhase(phase)
+      }
+    })
+
     const unsubEnd = EventsOn('chat:stream:end', (data: { conversation_id: string }) => {
       if (data.conversation_id !== streamingIdRef.current) return
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
+      flushBuffer()
       setIsStreaming(false)
       setStreamingContent('')
+      setStreamingPhase(null)
       streamingIdRef.current = null
+      sendingRef.current = false
       fetchMessages(data.conversation_id)
     })
+
     const unsubError = EventsOn('chat:stream:error', (data: { conversation_id: string; error: string }) => {
       if (data.conversation_id !== streamingIdRef.current) return
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
       setIsStreaming(false)
       setStreamingContent('')
+      setStreamingPhase(null)
       streamingIdRef.current = null
+      sendingRef.current = false
       setSendError(data.error)
       fetchMessages(data.conversation_id)
     })
@@ -193,10 +248,14 @@ export function useChat() {
     return () => {
       unsubStart()
       unsubChunk()
+      unsubPhase()
       unsubEnd()
       unsubError()
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
     }
-  }, [fetchMessages])
+  }, [fetchMessages, debouncedAppend, flushBuffer])
 
   useEffect(() => {
     fetchConversations()
@@ -222,6 +281,7 @@ export function useChat() {
     sending,
     isStreaming,
     streamingContent,
+    streamingPhase,
     sendError,
     setSendError,
   }

@@ -94,6 +94,7 @@ func (a *App) StoreInstall(pluginID, version string) (*model.InstallResult, erro
 		_ = a.storeClient.ClearPendingInstall(pluginID)
 	}
 
+	a.syncAgentTools()
 	return result, nil
 }
 
@@ -137,4 +138,6 @@ func (a *App) retryPendingInstalls() {
 	for _, p := range pending {
 		_ = a.storeClient.ClearPendingInstall(p.PluginID)
 	}
+
+	a.syncAgentTools()
 }

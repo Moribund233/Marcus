@@ -12,9 +12,12 @@ import (
 )
 
 // Registry 维护从 Marcus 工具到 LLM ToolDefinition 的映射。
+// 区分系统工具（内置，LLM 内部使用，不暴露给用户）和用户工具（工具箱安装注册）。
 type Registry struct {
-	// definitions 保存暴露给 LLM 的工具定义，key 为 tool ID。
+	// definitions 保存用户工具（工具箱安装）的定义，key 为 tool ID。
 	definitions map[string]model.ToolDefinition
+	// systemDefs 保存系统工具（如 memory）的定义，仅用于 LLM 调用，不写入 system prompt。
+	systemDefs map[string]model.ToolDefinition
 	// manifests 保存原始 ToolManifest，key 为 tool ID，供执行器使用。
 	manifests map[string]*model.ToolManifest
 }
@@ -23,6 +26,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		definitions: make(map[string]model.ToolDefinition),
+		systemDefs:  make(map[string]model.ToolDefinition),
 		manifests:   make(map[string]*model.ToolManifest),
 	}
 }
@@ -58,6 +62,13 @@ func (r *Registry) RegisterFromManifest(manifest *model.ToolManifest) error {
 	r.definitions[manifest.ID] = def
 	r.manifests[manifest.ID] = manifest
 	return nil
+}
+
+// ClearUserTools clears all user-registered tools (leaves system tools intact).
+// Used before re-registering after a re-scan so stale tools are removed.
+func (r *Registry) ClearUserTools() {
+	r.definitions = make(map[string]model.ToolDefinition)
+	r.manifests = make(map[string]*model.ToolManifest)
 }
 
 // RegisterMemoryTool 注册 Agent 用于自我管理长期记忆的特殊工具。
@@ -97,11 +108,35 @@ func (r *Registry) RegisterMemoryTool() {
 			},
 		},
 	}
-	r.definitions["memory"] = def
+	r.systemDefs["memory"] = def
 }
 
-// GetToolDefinitions 返回所有已注册的 LLM 工具定义，按名称排序。
+// GetToolDefinitions 返回所有工具定义（系统工具 + 用户工具），按名称排序。
+// 用于 LLM function calling API，LLM 可以看到并调用所有工具。
 func (r *Registry) GetToolDefinitions() []model.ToolDefinition {
+	ids := make([]string, 0, len(r.definitions)+len(r.systemDefs))
+	for id := range r.definitions {
+		ids = append(ids, id)
+	}
+	for id := range r.systemDefs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	defs := make([]model.ToolDefinition, 0, len(ids))
+	for _, id := range ids {
+		if d, ok := r.definitions[id]; ok {
+			defs = append(defs, d)
+		} else if d, ok := r.systemDefs[id]; ok {
+			defs = append(defs, d)
+		}
+	}
+	return defs
+}
+
+// GetUserToolDefinitions 仅返回用户安装的工具定义（不包含系统工具），按名称排序。
+// 用于 system prompt 文本描述，避免 LLM 将系统工具暴露给用户。
+func (r *Registry) GetUserToolDefinitions() []model.ToolDefinition {
 	ids := make([]string, 0, len(r.definitions))
 	for id := range r.definitions {
 		ids = append(ids, id)

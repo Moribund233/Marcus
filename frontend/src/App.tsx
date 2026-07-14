@@ -68,6 +68,7 @@ function App() {
     sending,
     isStreaming,
     streamingContent,
+    streamingPhase,
     sendError,
     setSendError,
   } = useChat()
@@ -193,9 +194,11 @@ function App() {
         <ErrorBoundary>
           {view === 'welcome' && (
             <WelcomePage
+              conversations={conversations.slice(0, 5)}
               onSelectConversation={handleSelectConv}
               onSelectTool={handleSelectTool}
               onNewConversation={handleCreateConversation}
+              onDeleteConversation={handleDeleteConv}
             />
           )}
 
@@ -207,10 +210,12 @@ function App() {
               sending={sending}
               isStreaming={isStreaming}
               streamingContent={streamingContent}
+              streamingPhase={streamingPhase}
               sendError={sendError}
               onSend={sendMessageStream}
               onLoadMessages={fetchMessages}
               onClearError={() => setSendError(null)}
+              onBack={handleBack}
             />
           )}
 

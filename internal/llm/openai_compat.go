@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"Marcus/internal/model"
@@ -19,10 +18,8 @@ import (
 // 通过配置 BaseURL 和 APIKey 即可对接 OpenAI、DeepSeek、Groq、Together、
 // OpenRouter、Ollama v1 等兼容端点。
 type OpenAICompatible struct {
-	cfg          Config
-	client       *http.Client
-	cachedModels []model.Model
-	modelsOnce   sync.Once
+	cfg    Config
+	client *http.Client
 }
 
 // NewOpenAICompatible 创建一个新的 OpenAI 兼容 Provider 实例。
@@ -45,40 +42,45 @@ func (o *OpenAICompatible) Name() string {
 
 // Models 返回该提供商支持的模型列表。
 //
-// 优先级链（三级 fallback）：
-//  1. 调用 /v1/models API 获取动态列表，用静态表补充 context length
-//  2. API 失败时使用注册表中的静态模型列表
-//  3. 兜底：返回当前配置模型的单条目占位（context=128K）
-//
-// 结果在首次调用后缓存，后续直接返回缓存。
+// 优先级链（四级 fallback）：
+//  1. 数据库缓存：由 RefreshLLMModels 在前端手动触发后存入
+//  2. 调用 /v1/models API 获取动态列表，结果异步写入 DB 缓存
+//  3. API 失败时使用注册表中的静态模型列表
+//  4. 兜底：返回当前配置模型的单条目占位（context=128K）
 func (o *OpenAICompatible) Models() []model.Model {
-	o.modelsOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	// Level 1: 数据库缓存（跨会话持久化，读取快，无网络开销）
+	if store := GetModelStore(); store != nil {
+		if cached, err := store.GetModels(o.cfg.Provider); err == nil && len(cached) > 0 {
+			return cached
+		}
+	}
 
-		models, err := o.fetchModelsFromAPI(ctx)
-		if err == nil {
-			o.cachedModels = models
-			return
-		}
+	// Level 2: 调用 API 获取动态列表
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-		// Level 2: 注册表的静态列表
-		entry := DefaultRegistry().Lookup(o.cfg.Provider)
-		if entry != nil && len(entry.Models) > 0 {
-			o.cachedModels = entry.Models
-			return
+	models, err := o.fetchModelsFromAPI(ctx)
+	if err == nil {
+		if store := GetModelStore(); store != nil {
+			go store.SetModels(o.cfg.Provider, models)
 		}
+		return models
+	}
 
-		// Level 3: 兜底占位
-		cl := ContextLengthForModel(o.cfg.Provider, o.cfg.Model)
-		if cl == 0 {
-			cl = 128000
-		}
-		o.cachedModels = []model.Model{
-			{ID: o.cfg.Model, Name: o.cfg.Model, Context: cl},
-		}
-	})
-	return o.cachedModels
+	// Level 3: 注册表的静态列表
+	entry := DefaultRegistry().Lookup(o.cfg.Provider)
+	if entry != nil && len(entry.Models) > 0 {
+		return entry.Models
+	}
+
+	// Level 4: 兜底占位
+	cl := ContextLengthForModel(o.cfg.Provider, o.cfg.Model)
+	if cl == 0 {
+		cl = 128000
+	}
+	return []model.Model{
+		{ID: o.cfg.Model, Name: o.cfg.Model, Context: cl},
+	}
 }
 
 // fetchModelsFromAPI 调用 /v1/models 端点获取模型列表。
@@ -229,8 +231,12 @@ func (o *OpenAICompatible) buildRequestBody(req *model.ChatRequest, stream bool)
 		})
 	}
 
+	model := req.Model
+	if model == "" {
+		model = o.cfg.Model
+	}
 	body := openAIChatRequest{
-		Model:       req.Model,
+		Model:       model,
 		Messages:    messages,
 		Stream:      stream,
 		Temperature: req.Temperature,
