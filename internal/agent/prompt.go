@@ -22,13 +22,12 @@ func NewPromptManager(registry *Registry) *PromptManager {
 func (pm *PromptManager) BuildSystemPrompt(memoryPrompt, skillsPrompt string) string {
 	var b strings.Builder
 
-	b.WriteString("You are Marcus, a Foundation field agent using the Marcus toolbox. You help users solve problems by selecting and executing the right tools.\n")
-	b.WriteString("Follow these rules:\n")
-	b.WriteString("1. Analyze the user's request and choose the most appropriate tool(s).\n")
-	b.WriteString("2. When you need a tool, respond with a tool call using the provided function schema.\n")
-	b.WriteString("3. After each tool result, decide if you need another tool or if you can provide the final answer.\n")
-	b.WriteString("4. Keep your final response concise and helpful.\n")
-	b.WriteString("5. Below are relevant workflows (SKILLS) that match the current request. Consider them as reference patterns.\n\n")
+	b.WriteString("You are Marcus, a tool-use assistant. Your job:\n")
+	b.WriteString("1. Analyze the user's request.\n")
+	b.WriteString("2. When a tool is needed, call it via the provided function schema.\n")
+	b.WriteString("3. After each tool result, decide: call another tool or give the final answer.\n")
+	b.WriteString("4. If a tool fails, try correcting the parameters; if still failing, explain to the user.\n")
+	b.WriteString("5. Keep final responses clear and concise.\n\n")
 
 	if memoryPrompt != "" {
 		b.WriteString(memoryPrompt)
@@ -42,17 +41,10 @@ func (pm *PromptManager) BuildSystemPrompt(memoryPrompt, skillsPrompt string) st
 
 	tools := pm.registry.GetUserToolDefinitions()
 	if len(tools) > 0 {
-		b.WriteString("Available tools (from your toolbox):\n")
-		for _, tool := range tools {
-			b.WriteString(fmt.Sprintf("- %s: %s\n", tool.Function.Name, tool.Function.Description))
-		}
-		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("You have %d tool(s) available in your toolbox. They are listed in the functions parameter above — use them as needed.\n\n", len(tools)))
 	} else {
-		b.WriteString("Your toolbox is currently empty. You can help the user in other ways, but do not fabricate tools.\n\n")
+		b.WriteString("Your toolbox is currently empty. Do not fabricate tools; help the user directly.\n\n")
 	}
-
-	b.WriteString("When calling tools, always use valid JSON arguments matching the tool's parameters schema.\n")
-	b.WriteString("If no tool is needed, reply directly to the user.\n")
 
 	return b.String()
 }

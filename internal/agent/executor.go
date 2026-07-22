@@ -64,12 +64,24 @@ func (e *Executor) Execute(ctx context.Context, call model.ToolCall) model.ToolC
 
 	output, exitCode, err := e.runner.RunSync(ctx, *manifest, args)
 	if err != nil {
-		result.Content = fmt.Sprintf("execute tool %q failed (exit %d): %v\nOutput:\n%s", call.Function.Name, exitCode, err, output)
+		result.Content = fmt.Sprintf("execute tool %q failed (exit %d): %v\nOutput:\n%s", call.Function.Name, exitCode, err, truncateOutput(output))
 		return result
 	}
 
-	result.Content = output
+	result.Content = truncateOutput(output)
 	return result
+}
+
+// maxToolOutputLen 是工具输出注入 LLM 上下文的最大字节数。
+// 超出部分被截断，防止撑爆对话窗口。
+const maxToolOutputLen = 10 * 1024
+
+// truncateOutput 截断工具输出至 maxToolOutputLen。
+func truncateOutput(s string) string {
+	if len(s) <= maxToolOutputLen {
+		return s
+	}
+	return s[:maxToolOutputLen] + fmt.Sprintf("\n\n[...output truncated at %d bytes, total %d bytes]", maxToolOutputLen, len(s))
 }
 
 // parseToolArguments 将工具调用的 JSON 参数字符串解析为字符串映射。

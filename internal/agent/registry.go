@@ -36,13 +36,18 @@ func (r *Registry) RegisterFromManifest(manifest *model.ToolManifest) error {
 	if manifest == nil {
 		return fmt.Errorf("manifest is nil")
 	}
-	if manifest.ID == "" {
-		return fmt.Errorf("manifest id is empty")
+	// 优先用 ID，为空时回退到 DisplayName（必填字段）
+	id := manifest.ID
+	if id == "" {
+		id = manifest.DisplayName
+	}
+	if id == "" {
+		return fmt.Errorf("manifest id and display_name are both empty")
 	}
 
 	params, err := convertParams(manifest)
 	if err != nil {
-		return fmt.Errorf("convert params for %s: %w", manifest.ID, err)
+		return fmt.Errorf("convert params for %s: %w", id, err)
 	}
 
 	desc := manifest.Description
@@ -53,14 +58,14 @@ func (r *Registry) RegisterFromManifest(manifest *model.ToolManifest) error {
 	def := model.ToolDefinition{
 		Type: "function",
 		Function: model.ToolFunctionDefinition{
-			Name:        manifest.ID,
+			Name:        id,
 			Description: desc,
 			Parameters:  params,
 		},
 	}
 
-	r.definitions[manifest.ID] = def
-	r.manifests[manifest.ID] = manifest
+	r.definitions[id] = def
+	r.manifests[id] = manifest
 	return nil
 }
 

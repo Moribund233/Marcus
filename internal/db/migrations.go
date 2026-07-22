@@ -252,5 +252,13 @@ func All() []Migration {
 				return err
 			},
 		},
+		{
+			ID:   "20260722_memory_priority",
+			Desc: "Add priority column to memories table",
+			Up: func(tx *sql.Tx) error {
+				_, err := tx.Exec(`ALTER TABLE memories ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`)
+				return err
+			},
+		},
 	}
 }

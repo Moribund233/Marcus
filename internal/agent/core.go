@@ -100,10 +100,11 @@ func (a *Agent) LLMProvider() llm.Provider {
 // Run 执行 Agent 主循环，处理用户消息并返回最终助手回复。
 //
 // 流程：
-//  1. 加载长期记忆快照并构建系统提示词。
-//  2. 将用户消息保存到对话历史。
-//  3. 进入 TAO 循环：调用 LLM → 解析响应 → 执行工具调用 → 保存结果 → 继续。
-//  4. 当 LLM 不再请求工具或达到最大迭代次数时，保存最终回复并返回。
+//  1. 将用户消息保存到对话历史。
+//  2. 进入 TAO 循环：加载记忆快照 → 构建系统提示词 → 调用 LLM → 解析响应 → 执行工具 → 继续。
+//  3. 当 LLM 不再请求工具或达到最大迭代次数时，保存最终回复并返回。
+//
+// 注意：记忆快照每次迭代重新构建，确保 Agent 在对话中新增的记忆即时生效。
 func (a *Agent) Run(ctx context.Context, conversationID string, userMessage string) (*model.ChatResponse, error) {
 	if err := a.ensureConversation(conversationID); err != nil {
 		return nil, fmt.Errorf("ensure conversation: %w", err)
@@ -113,13 +114,13 @@ func (a *Agent) Run(ctx context.Context, conversationID string, userMessage stri
 		return nil, fmt.Errorf("save user message: %w", err)
 	}
 
-	systemPrompt, err := a.buildSystemPrompt(userMessage)
-	if err != nil {
-		return nil, fmt.Errorf("build system prompt: %w", err)
-	}
-
 	var finalResponse *model.ChatResponse
 	for i := 0; i < a.maxIterations; i++ {
+		systemPrompt, err := a.buildSystemPrompt(userMessage)
+		if err != nil {
+			return nil, fmt.Errorf("build system prompt: %w", err)
+		}
+
 		history, err := a.buildMessageHistory(conversationID, systemPrompt)
 		if err != nil {
 			return nil, fmt.Errorf("build message history: %w", err)
@@ -228,6 +229,19 @@ func (a *Agent) buildSystemPrompt(userMessage string) (string, error) {
 	return prompt, nil
 }
 
+// consolidationPrompt 是 ConsolidateMemory 使用的 LLM 归纳指令模板。
+const consolidationPrompt = `Extract key facts from the conversation below. Only extract stable, factual information about the user (preferences, environment, project details). Skip greetings, thanks, and transient chit-chat.
+
+Return a JSON array of objects, each with "key" (short kebab-case identifier) and "content" (brief factual statement). Example:
+[{"key":"preferred-language","content":"User prefers Chinese responses"}]
+
+If no facts to extract, return an empty array [].
+
+Conversation:
+%s
+
+JSON facts:`
+
 // ConsolidateMemory 对已完成对话进行归纳：调用 LLM 提取关键事实并写入 L2 长期记忆。
 // 仅在对话有足够内容且 memoryStore 可用时执行；失败不影响主流程。
 func (a *Agent) ConsolidateMemory(ctx context.Context, conversationID string) {
@@ -266,17 +280,7 @@ func (a *Agent) ConsolidateMemory(ctx context.Context, conversationID string) {
 		conversationText = conversationText[len(conversationText)-6000:]
 	}
 
-	prompt := fmt.Sprintf(`Extract key facts from the conversation below. Only extract stable, factual information about the user (preferences, environment, project details). Skip greetings, thanks, and transient chit-chat.
-
-Return a JSON array of objects, each with "key" (short kebab-case identifier) and "content" (brief factual statement). Example:
-[{"key":"preferred-language","content":"User prefers Chinese responses"}]
-
-If no facts to extract, return an empty array [].
-
-Conversation:
-%s
-
-JSON facts:`, conversationText)
+		prompt := fmt.Sprintf(consolidationPrompt, conversationText)
 
 	resp, err := a.llm.Chat(ctx, &model.ChatRequest{
 		Messages: []model.Message{

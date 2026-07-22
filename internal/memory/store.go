@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,9 +41,8 @@ func SuggestedLimit(contextTokens int) int {
 
 // Store 提供长期记忆的持久化能力。
 type Store struct {
-	db        *sql.DB
-	limit     int
-	separator string
+	db    *sql.DB
+	limit int
 }
 
 // NewStore 创建一个新的记忆存储实例。
@@ -54,9 +54,8 @@ func NewStore(db *sql.DB, limit int) *Store {
 		limit = DefaultMemoryLimit
 	}
 	return &Store{
-		db:        db,
-		limit:     limit,
-		separator: "\n§\n",
+		db:    db,
+		limit: limit,
 	}
 }
 
@@ -73,15 +72,16 @@ func (s *Store) Add(entry model.MemoryEntry) (*model.MemoryStats, error) {
 		entry.UpdatedAt = now
 
 	_, err := s.db.Exec(
-		`INSERT INTO memories (id, scope, key, content, source, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO memories (id, scope, key, content, source, priority, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(key) DO UPDATE SET
 			 scope=excluded.scope,
 			 content=excluded.content,
 			 source=excluded.source,
+			 priority=excluded.priority,
 			 updated_at=excluded.updated_at`,
 		entry.ID, string(entry.Scope), entry.Key, entry.Content, entry.Source,
-		entry.CreatedAt, entry.UpdatedAt,
+		int(entry.Priority), entry.CreatedAt, entry.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert memory: %w", err)
@@ -230,12 +230,21 @@ func (s *Store) Stats(scope model.MemoryScope) (*model.MemoryStats, error) {
 }
 
 // BuildSnapshot 构建用于注入系统 Prompt 的记忆快照。
-// 默认包含 user 和 global 两个 scope 的记忆，按最近更新排序。
+// 默认包含 user 和 global 两个 scope 的记忆，按优先级降序、最近更新降序排列。
+// 高优先级条目确保被纳入快照，低优先级条目在超出字符上限时被截断。
 func (s *Store) BuildSnapshot() (*model.MemorySnapshot, error) {
 	entries, err := s.List("")
 	if err != nil {
 		return nil, err
 	}
+
+	// 按优先级降序，同优先级按最近更新降序
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Priority != entries[j].Priority {
+			return entries[i].Priority > entries[j].Priority
+		}
+		return entries[i].UpdatedAt > entries[j].UpdatedAt
+	})
 
 	var filtered []model.MemoryEntry
 	total := 0
@@ -244,11 +253,16 @@ func (s *Store) BuildSnapshot() (*model.MemorySnapshot, error) {
 			continue
 		}
 		if total+len(e.Content) > s.limit {
-			break
+			continue // 高优先级已在前，超限的跳过
 		}
 		filtered = append(filtered, e)
 		total += len(e.Content)
 	}
+
+	// 最终输出按时间倒序，LLM 更容易感知时序
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt > filtered[j].UpdatedAt
+	})
 
 	stats := &model.MemoryStats{
 		TotalChars: total,
@@ -268,24 +282,22 @@ func (s *Store) RenderPrompt(snapshot *model.MemorySnapshot) string {
 		return ""
 	}
 
-	var contents []string
+	var b strings.Builder
+	b.WriteString("── Long-term Memory ──\n")
 	for _, e := range snapshot.Entries {
-		contents = append(contents, fmt.Sprintf("[%s] %s", e.Key, e.Content))
+		scopeLabel := "user"
+		switch e.Scope {
+		case model.MemoryScopeProject:
+			scopeLabel = "project"
+		case model.MemoryScopeGlobal:
+			scopeLabel = "global"
+		}
+		b.WriteString(fmt.Sprintf("%s | %s: %s\n", scopeLabel, e.Key, e.Content))
 	}
-
-	usage := ""
 	if snapshot.Stats.MaxChars > 0 {
-		usage = fmt.Sprintf(" [%d%% — %d/%d chars]", int(snapshot.Stats.Usage*100), snapshot.Stats.TotalChars, snapshot.Stats.MaxChars)
+		b.WriteString(fmt.Sprintf("── %d entries, %d/%d chars ──", len(snapshot.Entries), snapshot.Stats.TotalChars, snapshot.Stats.MaxChars))
 	}
-
-	return fmt.Sprintf(
-		"══════════════════════════════════════════════════\n"+
-			"MEMORY (long-term facts)%s\n"+
-			"══════════════════════════════════════════════════\n"+
-			"%s",
-		usage,
-		strings.Join(contents, s.separator),
-	)
+	return b.String()
 }
 
 // ApplyToolCall 执行 memory 工具调用，并返回结果字符串。

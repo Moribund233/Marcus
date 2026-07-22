@@ -163,15 +163,26 @@ const (
 	MemoryScopeGlobal  MemoryScope = "global"
 )
 
+// MemoryPriority 表示长期记忆优先级（0=最低, 3=最高）。
+type MemoryPriority int
+
+const (
+	MemoryPriorityLow      MemoryPriority = 0
+	MemoryPriorityNormal   MemoryPriority = 1
+	MemoryPriorityHigh     MemoryPriority = 2
+	MemoryPriorityCritical MemoryPriority = 3
+)
+
 // MemoryEntry 表示一条长期记忆条目。
 type MemoryEntry struct {
-	ID        string      `json:"id"`
-	Scope     MemoryScope `json:"scope"`
-	Key       string      `json:"key"`
-	Content   string      `json:"content"`
-	Source    string      `json:"source"`
-	CreatedAt string      `json:"created_at"`
-	UpdatedAt string      `json:"updated_at"`
+	ID        string         `json:"id"`
+	Scope     MemoryScope    `json:"scope"`
+	Key       string         `json:"key"`
+	Content   string         `json:"content"`
+	Source    string         `json:"source"`
+	Priority  MemoryPriority `json:"priority"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
 }
 
 // SkillEntry 表示一条技能记忆（L3），记录可复用的工具工作流。
